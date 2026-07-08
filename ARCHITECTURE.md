@@ -260,7 +260,7 @@ type AppError = {
 **Formats (S3, S4)**
 | Command | Request | Response | Errors |
 |---------|---------|----------|--------|
-| `probe_formats` | `{ url, proxy? }` | `{ title: string, formats: Format[] }` where `Format = { id, resolution, ext, fps?, filesize?, codec?, note? }` | `PROBE_FAILED` (carries stderr) |
+| `probe_formats` | `{ url, proxy? }` | `{ title: string, formats: Format[] }` where `Format = { id, resolution, ext, fps?, filesize?, codec?, note?, has_audio }` | `PROBE_FAILED` (carries stderr) |
 
 **Presets (S6, S3)**
 | Command | Request | Response | Errors |

@@ -9,6 +9,7 @@
   import { probeFormats } from "../ipc";
   import type { AppError, ProbeFormatsResponse } from "../types";
   import FormatQuickPicks from "../components/FormatQuickPicks.svelte";
+  import FormatPicker from "../components/FormatPicker.svelte";
 
   let { open = $bindable(false) }: { open?: boolean } = $props();
 
@@ -25,6 +26,8 @@
   let probeResult = $state<ProbeFormatsResponse | null>(null);
   let probeError = $state<AppError | null>(null);
   let adding = $state(false);
+
+  let formatPickerOpen = $state(false);
 
   let advancedOpen = $state(false);
   let outputTemplate = $state("");
@@ -44,6 +47,7 @@
     probeState = "idle";
     probeResult = null;
     probeError = null;
+    formatPickerOpen = false;
     advancedOpen = false;
     outputTemplate = "";
     proxyOverride = "";
@@ -142,7 +146,14 @@
 
       {#if probeState !== "idle"}
         <div class="format-section">
-          <span class="section-label">Format</span>
+          <div class="format-section-header">
+            <span class="section-label">Format</span>
+            {#if probeState === "success" && probeResult}
+              <button type="button" class="format-picker-link" onclick={() => (formatPickerOpen = true)}>
+                Format Picker
+              </button>
+            {/if}
+          </div>
           {#if probeState === "loading"}
             <div class="skeleton" aria-hidden="true">
               <div class="skeleton-row"></div>
@@ -161,6 +172,16 @@
             />
           {/if}
         </div>
+      {/if}
+
+      {#if probeResult}
+        <FormatPicker
+          bind:open={formatPickerOpen}
+          formats={probeResult.formats}
+          title={probeResult.title}
+          bind:expression
+          bind:selectedQuickPickId
+        />
       {/if}
 
       <button
@@ -290,6 +311,19 @@
   .section-label {
     color: var(--muted-foreground);
     font-size: 0.85em;
+  }
+  .format-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .format-picker-link {
+    background: transparent;
+    border: none;
+    color: var(--primary);
+    padding: 0;
+    font-size: 0.85em;
+    text-decoration: underline;
   }
   .skeleton {
     display: flex;

@@ -377,6 +377,11 @@ pub struct ProbeFormat {
     pub filesize: Option<i64>,
     pub codec: Option<String>,
     pub note: Option<String>,
+    /// True when this format carries its own audio track (yt-dlp `acodec` !=
+    /// `none`/absent) regardless of whether it's also video — i.e. a video
+    /// row with `has_audio: true` is already muxed and needs no `+audio_id`
+    /// merge (S4's "free-merge" filter, T10).
+    pub has_audio: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -494,6 +499,7 @@ fn map_format(f: YtDlpFormatJson) -> ProbeFormat {
         filesize: f.filesize.or(f.filesize_approx),
         codec,
         note: f.format_note,
+        has_audio: is_audio,
     }
 }
 
@@ -607,5 +613,17 @@ mod tests {
         let mapped = map_format(f);
         assert_eq!(mapped.resolution.as_deref(), Some("427x240"));
         assert_eq!(mapped.codec, None);
+    }
+
+    #[test]
+    fn map_format_marks_has_audio_false_for_video_only_and_true_for_muxed() {
+        let video_only = ytdlp_format(Some("avc1"), Some("none"), Some("1920x1080"), Some(1920), Some(1080));
+        assert!(!map_format(video_only).has_audio);
+
+        let muxed = ytdlp_format(Some("avc1"), Some("mp4a"), Some("1920x1080"), Some(1920), Some(1080));
+        assert!(map_format(muxed).has_audio);
+
+        let audio_only = ytdlp_format(Some("none"), Some("aac"), None, None, None);
+        assert!(map_format(audio_only).has_audio);
     }
 }

@@ -124,6 +124,7 @@ export interface Format {
   filesize: number | null;
   codec: string | null;
   note: string | null;
+  has_audio: boolean;
 }
 
 export interface ProbeFormatsRequest {
