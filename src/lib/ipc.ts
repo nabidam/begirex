@@ -9,14 +9,18 @@ import type {
   BinaryStatus,
   BinaryStatuses,
   BulkActionRequest,
+  CreatePresetRequest,
   Item,
   ItemRemovedEvent,
+  Preset,
+  PresetListResponse,
   ProbeFormatsRequest,
   ProbeFormatsResponse,
   ProgressEvent,
   Settings,
   SettingsUpdate,
   StageChangedEvent,
+  UpdatePresetRequest,
 } from "./types";
 
 // Tauri rejects with the AppError JSON shape (serde `Err` side) — normalize
@@ -125,4 +129,26 @@ export function setConcurrency(n: number): Promise<{ n: number }> {
 
 export function probeFormats(request: ProbeFormatsRequest): Promise<ProbeFormatsResponse> {
   return call<ProbeFormatsResponse>("probe_formats", { request });
+}
+
+// --- T11: presets (S6, S3) ---------------------------------------------------
+
+export function listPresets(): Promise<Preset[]> {
+  return call<Preset[]>("list_presets");
+}
+
+export function createPreset(request: CreatePresetRequest): Promise<Preset> {
+  return call<Preset>("create_preset", { request });
+}
+
+export function updatePreset(request: UpdatePresetRequest): Promise<Preset> {
+  return call<Preset>("update_preset", { request });
+}
+
+export function deletePreset(id: number): Promise<PresetListResponse> {
+  return call<PresetListResponse>("delete_preset", { request: { id } });
+}
+
+export function setDefaultPreset(id: number): Promise<PresetListResponse> {
+  return call<PresetListResponse>("set_default_preset", { request: { id } });
 }

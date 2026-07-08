@@ -6,6 +6,7 @@ pub mod engine_supervisor;
 pub mod error;
 mod ipc;
 pub mod persistence;
+pub mod preset_service;
 pub mod progress_parser;
 pub mod queue_manager;
 pub mod settings_service;
@@ -64,6 +65,11 @@ pub fn run() {
             ipc::get_item_log,
             ipc::watch_log,
             ipc::probe_formats,
+            ipc::list_presets,
+            ipc::create_preset,
+            ipc::update_preset,
+            ipc::delete_preset,
+            ipc::set_default_preset,
         ])
         .setup(|app| {
             let app_data_dir = app

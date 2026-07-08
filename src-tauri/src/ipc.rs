@@ -5,7 +5,8 @@
 use crate::binary_manager::{self, BinaryStatus, Which};
 use crate::engine_supervisor::{Emitter, ProbeFormat};
 use crate::error::AppError;
-use crate::persistence::{self, Item};
+use crate::persistence::{self, Item, Preset};
+use crate::preset_service::{self, CreatePresetRequest, UpdatePresetRequest};
 use crate::progress_parser::{self, ProgressTick};
 use crate::queue_manager::{self, AddDownloadParams, BinaryPaths, BulkVerb};
 use crate::settings_service::{self, Settings, SettingsUpdate};
@@ -618,6 +619,117 @@ pub async fn probe_formats(
         title: result.title,
         formats: result.formats,
     })
+}
+
+// --- T11: presets (S6, S3) --------------------------------------------------
+
+fn resolve_ytdlp_path(conn: &rusqlite::Connection) -> Result<String, AppError> {
+    binary_manager::detect(conn, &Which::Ytdlp)?
+        .path
+        .ok_or_else(|| AppError::BinaryNotFound {
+            message: "yt-dlp not found; set its path in Settings".into(),
+        })
+}
+
+#[tauri::command]
+pub fn list_presets(state: State<AppState>) -> Result<Vec<Preset>, AppError> {
+    let conn = state.db.lock().expect("db mutex poisoned");
+    preset_service::list_presets(&conn)
+}
+
+/// Trust-boundary validation (§8): non-empty name/format_expr/output_template
+/// before any module call. Dry-parse + the DB's `PRESET_NAME_TAKEN` uniqueness
+/// check happen inside `preset_service::create_preset`.
+#[tauri::command]
+pub async fn create_preset(
+    state: State<'_, AppState>,
+    request: CreatePresetRequest,
+) -> Result<Preset, AppError> {
+    if request.name.trim().is_empty() {
+        return Err(AppError::Validation {
+            message: "name must not be empty".into(),
+        });
+    }
+    if request.format_expr.trim().is_empty() {
+        return Err(AppError::Validation {
+            message: "format_expr must not be empty".into(),
+        });
+    }
+    if request.output_template.trim().is_empty() {
+        return Err(AppError::Validation {
+            message: "output_template must not be empty".into(),
+        });
+    }
+
+    let ytdlp_path = {
+        let conn = state.db.lock().expect("db mutex poisoned");
+        resolve_ytdlp_path(&conn)?
+    };
+    // Dry-parse before locking the connection: `rusqlite::Connection` isn't
+    // `Send`, so it can never be held across this `.await` inside a
+    // `#[tauri::command]` future (see preset_service.rs's module doc).
+    crate::engine_supervisor::dry_parse_format(&ytdlp_path, &request.format_expr).await?;
+
+    let conn = state.db.lock().expect("db mutex poisoned");
+    preset_service::create_preset(&conn, request)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdatePresetPathRequest {
+    pub id: i64,
+    #[serde(flatten)]
+    pub update: UpdatePresetRequest,
+}
+
+#[tauri::command]
+pub async fn update_preset(
+    state: State<'_, AppState>,
+    request: UpdatePresetPathRequest,
+) -> Result<Preset, AppError> {
+    if let Some(name) = &request.update.name {
+        if name.trim().is_empty() {
+            return Err(AppError::Validation {
+                message: "name must not be empty".into(),
+            });
+        }
+    }
+    if let Some(expr) = &request.update.format_expr {
+        if expr.trim().is_empty() {
+            return Err(AppError::Validation {
+                message: "format_expr must not be empty".into(),
+            });
+        }
+    }
+
+    let ytdlp_path = {
+        let conn = state.db.lock().expect("db mutex poisoned");
+        resolve_ytdlp_path(&conn)?
+    };
+    if let Some(expr) = &request.update.format_expr {
+        crate::engine_supervisor::dry_parse_format(&ytdlp_path, expr).await?;
+    }
+
+    let conn = state.db.lock().expect("db mutex poisoned");
+    preset_service::update_preset(&conn, request.id, request.update)
+}
+
+#[derive(Debug, Serialize)]
+pub struct PresetListResponse {
+    pub presets: Vec<Preset>,
+}
+
+#[tauri::command]
+pub fn delete_preset(state: State<AppState>, request: GetItemRequest) -> Result<PresetListResponse, AppError> {
+    let conn = state.db.lock().expect("db mutex poisoned");
+    let presets = preset_service::delete_preset(&conn, request.id)?;
+    Ok(PresetListResponse { presets })
+}
+
+#[tauri::command]
+pub fn set_default_preset(state: State<AppState>, request: GetItemRequest) -> Result<PresetListResponse, AppError> {
+    let conn = state.db.lock().expect("db mutex poisoned");
+    let presets = preset_service::set_default_preset(&conn, request.id)?;
+    Ok(PresetListResponse { presets })
 }
 
 #[cfg(test)]

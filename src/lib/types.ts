@@ -115,6 +115,44 @@ export interface BulkActionRequest {
   action: "pause" | "resume" | "cancel" | "remove";
 }
 
+// persistence.rs's Preset (ARCHITECTURE §3 presets table).
+export interface Preset {
+  id: number;
+  name: string;
+  format_expr: string;
+  output_template: string;
+  proxy: string | null;
+  extra_args: string | null;
+  is_default: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+// preset_service.rs's CreatePresetRequest.
+export interface CreatePresetRequest {
+  name: string;
+  format_expr: string;
+  output_template: string;
+  proxy?: string | null;
+  extra_args?: string | null;
+  is_default?: boolean;
+}
+
+// preset_service.rs's UpdatePresetRequest, flattened with `id` by
+// ipc.rs's UpdatePresetPathRequest — only present fields are applied.
+export interface UpdatePresetRequest {
+  id: number;
+  name?: string;
+  format_expr?: string;
+  output_template?: string;
+  proxy?: string | null;
+  extra_args?: string | null;
+}
+
+export interface PresetListResponse {
+  presets: Preset[];
+}
+
 // engine_supervisor.rs's ProbeFormat / ProbeResult (ARCHITECTURE §7.2).
 export interface Format {
   id: string;

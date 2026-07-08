@@ -456,6 +456,74 @@ pub async fn probe(ytdlp_path: &str, url: &str, proxy: Option<&str>) -> Result<P
     })
 }
 
+/// A tiny fake yt-dlp `-J` payload covering the full height range (audio,
+/// 480p..4320p) so any reasonable height/resolution filter still has
+/// candidates to select from — `--load-info-json` runs `format_expr`
+/// through yt-dlp's real selector parser against this local, offline stand-in
+/// instead of a network probe (T11 "dry-parse via engine").
+///
+/// ponytail: an expression that's syntactically valid but matches none of
+/// these stand-in formats (e.g. an exotic codec filter) still reports
+/// `INVALID_FORMAT_EXPR` with yt-dlp's "Requested format is not available"
+/// stderr — same failure shape a real download against an unmatching video
+/// would hit, so it's an acceptable false-positive surface for a save-time
+/// check; a wider stand-in format list is the upgrade path if this bites.
+const DRY_PARSE_INFO_JSON: &str = r#"{
+  "id": "dry-parse", "title": "dry-parse", "extractor": "generic",
+  "extractor_key": "Generic", "webpage_url": "https://example.invalid/",
+  "original_url": "https://example.invalid/",
+  "formats": [
+    {"format_id": "audio", "ext": "m4a", "vcodec": "none", "acodec": "mp4a.40.2", "url": "https://example.invalid/a"},
+    {"format_id": "v480", "ext": "mp4", "vcodec": "avc1", "acodec": "none", "width": 854, "height": 480, "url": "https://example.invalid/v480"},
+    {"format_id": "v1080", "ext": "webm", "vcodec": "vp9", "acodec": "none", "width": 1920, "height": 1080, "url": "https://example.invalid/v1080"},
+    {"format_id": "v2160", "ext": "webm", "vcodec": "vp9", "acodec": "none", "width": 3840, "height": 2160, "url": "https://example.invalid/v2160"},
+    {"format_id": "v4320", "ext": "webm", "vcodec": "vp9", "acodec": "none", "width": 7680, "height": 4320, "url": "https://example.invalid/v4320"},
+    {"format_id": "best", "ext": "mp4", "vcodec": "avc1", "acodec": "mp4a.40.2", "width": 1920, "height": 1080, "url": "https://example.invalid/best"}
+  ]
+}"#;
+
+/// Validates a format expression by running it through yt-dlp's real
+/// selector parser via `--load-info-json` (no network call) — ARCHITECTURE
+/// §2 "preset_service: dry-parse format expression on save",
+/// engine_supervisor is the shared dependency because it owns all yt-dlp
+/// invocation. A non-zero exit (bad syntax or no stand-in format matches)
+/// becomes `INVALID_FORMAT_EXPR` carrying yt-dlp's stderr verbatim (§7.1).
+pub async fn dry_parse_format(ytdlp_path: &str, format_expr: &str) -> Result<(), AppError> {
+    let info_json_path =
+        std::env::temp_dir().join(format!("begirex-dry-parse-{}.json", std::process::id()));
+    tokio::fs::write(&info_json_path, DRY_PARSE_INFO_JSON)
+        .await
+        .map_err(|e| AppError::InvalidFormatExpr {
+            message: format!("failed to write dry-parse scratch file: {e}"),
+            stderr: None,
+        })?;
+
+    let mut cmd = Command::new(ytdlp_path);
+    cmd.arg("--load-info-json")
+        .arg(&info_json_path)
+        .arg("-f")
+        .arg(format_expr)
+        .arg("--simulate")
+        .arg("--no-warnings");
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let output = cmd.output().await;
+    let _ = tokio::fs::remove_file(&info_json_path).await;
+    let output = output.map_err(|e| AppError::InvalidFormatExpr {
+        message: format!("failed to run yt-dlp: {e}"),
+        stderr: None,
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(AppError::InvalidFormatExpr {
+            message: "invalid format expression".into(),
+            stderr: Some(stderr),
+        });
+    }
+    Ok(())
+}
+
 /// Pure mapping from one yt-dlp `-J` format entry to our `ProbeFormat`
 /// (factored out of `probe` so it's unit-testable without spawning a real
 /// process).
@@ -613,6 +681,30 @@ mod tests {
         let mapped = map_format(f);
         assert_eq!(mapped.resolution.as_deref(), Some("427x240"));
         assert_eq!(mapped.codec, None);
+    }
+
+    fn ytdlp_path() -> String {
+        std::env::var("YTDLP_TEST_PATH").unwrap_or_else(|_| "yt-dlp".into())
+    }
+
+    #[tokio::test]
+    async fn dry_parse_format_accepts_valid_expression() {
+        dry_parse_format(&ytdlp_path(), "bv*[height<=2160]+ba/b")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn dry_parse_format_rejects_malformed_expression() {
+        let err = dry_parse_format(&ytdlp_path(), "bv*[[[garbage")
+            .await
+            .unwrap_err();
+        match err {
+            AppError::InvalidFormatExpr { stderr, .. } => {
+                assert!(stderr.unwrap_or_default().contains("Invalid format specification"));
+            }
+            other => panic!("expected InvalidFormatExpr, got {other:?}"),
+        }
     }
 
     #[test]

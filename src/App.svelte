@@ -5,6 +5,7 @@
   import { onMount } from "svelte";
   import { settingsStore } from "./lib/stores/settings.svelte";
   import { queueStore } from "./lib/stores/queue.svelte";
+  import { presetsStore } from "./lib/stores/presets.svelte";
   import Onboarding from "./lib/views/Onboarding.svelte";
   import Queue from "./lib/views/Queue.svelte";
 
@@ -16,14 +17,14 @@
     const binaries = settingsStore.binaries;
     if (binaries?.ytdlp.found && binaries?.ffmpeg.found) {
       showQueue = true;
-      await queueStore.init();
+      await Promise.all([queueStore.init(), presetsStore.init()]);
     }
     ready = true;
   });
 
   async function handleContinue() {
     showQueue = true;
-    await queueStore.init();
+    await Promise.all([queueStore.init(), presetsStore.init()]);
   }
 </script>
 

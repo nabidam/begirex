@@ -350,6 +350,181 @@ pub fn find_active_item_by_url(conn: &Connection, url: &str) -> Result<Option<It
         .optional()?)
 }
 
+// --- T11: presets CRUD (ARCHITECTURE §3 presets table + §7.2 preset commands) ---
+
+/// One row of the `presets` table, serialized verbatim for
+/// `list_presets`/`create_preset`/`update_preset`/`delete_preset` responses.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Preset {
+    pub id: i64,
+    pub name: String,
+    pub format_expr: String,
+    pub output_template: String,
+    pub proxy: Option<String>,
+    pub extra_args: Option<String>,
+    pub is_default: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+const PRESET_COLUMNS: &str =
+    "id, name, format_expr, output_template, proxy, extra_args, is_default, created_at, updated_at";
+
+fn row_to_preset(row: &rusqlite::Row) -> rusqlite::Result<Preset> {
+    Ok(Preset {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        format_expr: row.get(2)?,
+        output_template: row.get(3)?,
+        proxy: row.get(4)?,
+        extra_args: row.get(5)?,
+        is_default: row.get::<_, i64>(6)? != 0,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+    })
+}
+
+/// Fields needed to insert a new preset; `is_default` is decided by the
+/// service layer (preset_service), not the caller of this fn directly.
+pub struct NewPreset {
+    pub name: String,
+    pub format_expr: String,
+    pub output_template: String,
+    pub proxy: Option<String>,
+    pub extra_args: Option<String>,
+    pub is_default: bool,
+}
+
+/// Partial update payload — only present (`Some`) fields are applied.
+#[derive(Debug, Clone, Default)]
+pub struct PresetUpdate {
+    pub name: Option<String>,
+    pub format_expr: Option<String>,
+    pub output_template: Option<String>,
+    pub proxy: Option<Option<String>>,
+    pub extra_args: Option<Option<String>>,
+}
+
+/// Maps a UNIQUE-constraint violation on `presets.name` to `PresetNameTaken`;
+/// every other rusqlite error falls through to the generic `DbError` `From`
+/// impl (error.rs).
+fn map_preset_write_err(err: rusqlite::Error, name: &str) -> AppError {
+    if let rusqlite::Error::SqliteFailure(ref sqlite_err, Some(ref detail)) = err {
+        // Distinguish the two UNIQUE constraints presets can trip: the name
+        // column maps to a user-facing `PresetNameTaken`; the `is_default`
+        // partial index (ARCHITECTURE §3) is a programming error the caller
+        // should've avoided via `clear_default_preset` first, so it falls
+        // through to the generic `DbError`.
+        if sqlite_err.code == rusqlite::ErrorCode::ConstraintViolation && detail.contains("presets.name") {
+            return AppError::PresetNameTaken {
+                message: format!("a preset named '{name}' already exists"),
+            };
+        }
+    }
+    AppError::from(err)
+}
+
+pub fn list_presets(conn: &Connection) -> Result<Vec<Preset>, AppError> {
+    Ok(conn
+        .prepare(&format!(
+            "SELECT {PRESET_COLUMNS} FROM presets ORDER BY is_default DESC, name ASC"
+        ))?
+        .query_map([], row_to_preset)?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub fn get_preset(conn: &Connection, id: i64) -> Result<Preset, AppError> {
+    conn.query_row(
+        &format!("SELECT {PRESET_COLUMNS} FROM presets WHERE id = ?1"),
+        [id],
+        row_to_preset,
+    )
+    .optional()?
+    .ok_or_else(|| AppError::DbError {
+        message: format!("preset {id} not found"),
+    })
+}
+
+pub fn count_presets(conn: &Connection) -> Result<i64, AppError> {
+    Ok(conn.query_row("SELECT count(*) FROM presets", [], |row| row.get(0))?)
+}
+
+pub fn insert_preset(conn: &Connection, new: NewPreset) -> Result<Preset, AppError> {
+    let now = now_unix();
+    conn.execute(
+        "INSERT INTO presets (name, format_expr, output_template, proxy, extra_args, is_default, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+        rusqlite::params![
+            new.name,
+            new.format_expr,
+            new.output_template,
+            new.proxy,
+            new.extra_args,
+            new.is_default as i64,
+            now,
+        ],
+    )
+    .map_err(|e| map_preset_write_err(e, &new.name))?;
+
+    get_preset(conn, conn.last_insert_rowid())
+}
+
+pub fn update_preset(conn: &Connection, id: i64, update: PresetUpdate) -> Result<Preset, AppError> {
+    let current = get_preset(conn, id)?;
+    let name = update.name.unwrap_or(current.name);
+    conn.execute(
+        "UPDATE presets SET name = ?1, format_expr = ?2, output_template = ?3, proxy = ?4,
+            extra_args = ?5, updated_at = ?6 WHERE id = ?7",
+        rusqlite::params![
+            name,
+            update.format_expr.unwrap_or(current.format_expr),
+            update.output_template.unwrap_or(current.output_template),
+            update.proxy.unwrap_or(current.proxy),
+            update.extra_args.unwrap_or(current.extra_args),
+            now_unix(),
+            id,
+        ],
+    )
+    .map_err(|e| map_preset_write_err(e, &name))?;
+    get_preset(conn, id)
+}
+
+pub fn delete_preset(conn: &Connection, id: i64) -> Result<(), AppError> {
+    conn.execute("DELETE FROM presets WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+/// Clears `is_default` on every preset (used before setting a new one, since
+/// the partial unique index rejects two `is_default=1` rows at once).
+pub fn clear_default_preset(conn: &Connection) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE presets SET is_default = 0, updated_at = ?1 WHERE is_default = 1",
+        [now_unix()],
+    )?;
+    Ok(())
+}
+
+pub fn set_default_preset(conn: &Connection, id: i64) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE presets SET is_default = 1, updated_at = ?1 WHERE id = ?2",
+        rusqlite::params![now_unix(), id],
+    )?;
+    Ok(())
+}
+
+/// The preset with the lowest id other than `excluding_id` — used to pick a
+/// promotion target when the default preset is deleted (ARCHITECTURE §3
+/// invariant: exactly one default must exist whenever ≥1 preset exists).
+pub fn first_other_preset_id(conn: &Connection, excluding_id: i64) -> Result<Option<i64>, AppError> {
+    Ok(conn
+        .query_row(
+            "SELECT id FROM presets WHERE id != ?1 ORDER BY id ASC LIMIT 1",
+            [excluding_id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
 const MIGRATION_001: &str = include_str!("../migrations/001_init.sql");
 
 /// Opens (creating if absent) the DB at `path`, runs migrations if needed, and
@@ -737,5 +912,129 @@ mod tests {
             fetched.error_message.as_deref(),
             Some("Requested format is not available")
         );
+    }
+
+    fn new_test_preset(name: &str, is_default: bool) -> NewPreset {
+        NewPreset {
+            name: name.into(),
+            format_expr: "bv*+ba/b".into(),
+            output_template: "%(title)s.%(ext)s".into(),
+            proxy: None,
+            extra_args: None,
+            is_default,
+        }
+    }
+
+    #[test]
+    fn preset_survives_reopen_of_a_real_db_file() {
+        // K4-AC1/AC5: "Create '4K', relaunch, reopen S6 → present with that
+        // expression" — proves the round trip through a real on-disk file
+        // (not just an in-memory Connection), same relaunch shape
+        // `wal_mode_on_real_file` proves for the schema/seed itself.
+        let dir = std::env::temp_dir().join(format!("begirex_preset_test_{}", now_unix()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("begirex.db");
+
+        let conn = open_and_init(&db_path, "/home/test/Downloads").unwrap();
+        let created = insert_preset(
+            &conn,
+            NewPreset {
+                name: "4K".into(),
+                format_expr: "bv*[height<=2160]+ba/b".into(),
+                output_template: "%(title)s.%(ext)s".into(),
+                proxy: None,
+                extra_args: None,
+                is_default: false,
+            },
+        )
+        .unwrap();
+        drop(conn);
+
+        // "relaunch": fresh open_and_init against the same file.
+        let conn2 = open_and_init(&db_path, "/home/test/Downloads").unwrap();
+        let reopened = get_preset(&conn2, created.id).unwrap();
+        assert_eq!(reopened.name, "4K");
+        assert_eq!(reopened.format_expr, "bv*[height<=2160]+ba/b");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn insert_preset_rejects_duplicate_name() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_for_test(&conn);
+        insert_preset(&conn, new_test_preset("4K", false)).unwrap();
+
+        let err = insert_preset(&conn, new_test_preset("4K", false)).unwrap_err();
+        assert!(matches!(err, AppError::PresetNameTaken { .. }));
+    }
+
+    #[test]
+    fn insert_preset_rejects_second_default() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_for_test(&conn);
+        insert_preset(&conn, new_test_preset("Archive", true)).unwrap();
+
+        // DB-level partial unique index rejects a second is_default=1 row
+        // (ARCHITECTURE §3) — this is what the service layer's
+        // clear-then-set dance exists to avoid tripping.
+        let err = insert_preset(&conn, new_test_preset("4K", true)).unwrap_err();
+        assert!(matches!(err, AppError::DbError { .. }));
+    }
+
+    #[test]
+    fn set_default_preset_after_clear_moves_the_star() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_for_test(&conn);
+        let archive = insert_preset(&conn, new_test_preset("Archive", true)).unwrap();
+        let fourk = insert_preset(&conn, new_test_preset("4K", false)).unwrap();
+
+        clear_default_preset(&conn).unwrap();
+        set_default_preset(&conn, fourk.id).unwrap();
+
+        assert!(!get_preset(&conn, archive.id).unwrap().is_default);
+        assert!(get_preset(&conn, fourk.id).unwrap().is_default);
+    }
+
+    #[test]
+    fn update_preset_leaves_unset_fields_untouched() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_for_test(&conn);
+        let preset = insert_preset(&conn, new_test_preset("Archive", false)).unwrap();
+
+        let updated = update_preset(
+            &conn,
+            preset.id,
+            PresetUpdate {
+                format_expr: Some("bv*[height<=1080]+ba/b".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(updated.name, "Archive");
+        assert_eq!(updated.format_expr, "bv*[height<=1080]+ba/b");
+    }
+
+    #[test]
+    fn first_other_preset_id_skips_excluded() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_for_test(&conn);
+        let a = insert_preset(&conn, new_test_preset("A", true)).unwrap();
+        let b = insert_preset(&conn, new_test_preset("B", false)).unwrap();
+
+        assert_eq!(first_other_preset_id(&conn, a.id).unwrap(), Some(b.id));
+        assert_eq!(first_other_preset_id(&conn, b.id).unwrap(), Some(a.id));
+    }
+
+    #[test]
+    fn delete_preset_removes_row() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_for_test(&conn);
+        let preset = insert_preset(&conn, new_test_preset("4K", false)).unwrap();
+
+        delete_preset(&conn, preset.id).unwrap();
+
+        assert!(get_preset(&conn, preset.id).is_err());
     }
 }
