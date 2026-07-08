@@ -209,6 +209,46 @@ pub fn finish_item(
     Ok(())
 }
 
+/// Sets `stage` only, leaving every other column untouched — the generic
+/// stage-transition write used by queue_manager's scheduler (`queued` ->
+/// `downloading` on slot-refill, `paused` -> `downloading` on reconcile
+/// resume). Terminal transitions with output_path/error_message still go
+/// through `finish_item`.
+pub fn set_stage(conn: &Connection, id: i64, stage: &str) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE items SET stage = ?1, updated_at = ?2 WHERE id = ?3",
+        rusqlite::params![stage, now_unix(), id],
+    )?;
+    Ok(())
+}
+
+/// Finds items left `downloading`/`merging` — crash-dirty because the yt-dlp
+/// supervising process died with the app (§8 durability). Ordered by
+/// `queue_position` so launch-reconcile resumes in a stable, predictable
+/// order (T3).
+pub fn find_dirty_items(conn: &Connection) -> Result<Vec<Item>, AppError> {
+    let items = conn
+        .prepare(&format!(
+            "SELECT {ITEM_COLUMNS} FROM items WHERE stage IN ('downloading', 'merging')
+             ORDER BY queue_position"
+        ))?
+        .query_map([], row_to_item)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(items)
+}
+
+/// Bulk-transitions every crash-dirty (`downloading`/`merging`) item to
+/// `paused` (§8's literal wording) so `list_items` shows correct
+/// last-checkpointed bytes immediately, before the scheduler decides which
+/// of them to resume.
+pub fn pause_dirty_items(conn: &Connection) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE items SET stage = 'paused', updated_at = ?1 WHERE stage IN ('downloading', 'merging')",
+        [now_unix()],
+    )?;
+    Ok(())
+}
+
 /// Appends one captured stdout/stderr line to `item_logs` (ring-buffer
 /// trimming + read commands are T7's job — this just writes the row).
 pub fn insert_log(conn: &Connection, item_id: i64, stream: &str, line: &str) -> Result<(), AppError> {
@@ -459,6 +499,47 @@ mod tests {
         let fetched = get_item(&conn, item.id).unwrap();
         assert_eq!(fetched.stage, "completed");
         assert_eq!(fetched.output_path.as_deref(), Some("/tmp/out/video.mp4"));
+    }
+
+    #[test]
+    fn set_stage_updates_stage_only() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_for_test(&conn);
+        let item = insert_item(&conn, new_test_item("https://a", "queued")).unwrap();
+
+        set_stage(&conn, item.id, "downloading").unwrap();
+
+        let fetched = get_item(&conn, item.id).unwrap();
+        assert_eq!(fetched.stage, "downloading");
+    }
+
+    #[test]
+    fn find_dirty_items_returns_downloading_and_merging_ordered_by_position() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_for_test(&conn);
+        insert_item(&conn, new_test_item("https://a", "downloading")).unwrap();
+        insert_item(&conn, new_test_item("https://b", "queued")).unwrap();
+        insert_item(&conn, new_test_item("https://c", "merging")).unwrap();
+
+        let dirty = find_dirty_items(&conn).unwrap();
+        assert_eq!(dirty.len(), 2);
+        assert_eq!(dirty[0].url, "https://a");
+        assert_eq!(dirty[1].url, "https://c");
+    }
+
+    #[test]
+    fn pause_dirty_items_transitions_downloading_and_merging_only() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_for_test(&conn);
+        let a = insert_item(&conn, new_test_item("https://a", "downloading")).unwrap();
+        let b = insert_item(&conn, new_test_item("https://b", "merging")).unwrap();
+        let c = insert_item(&conn, new_test_item("https://c", "queued")).unwrap();
+
+        pause_dirty_items(&conn).unwrap();
+
+        assert_eq!(get_item(&conn, a.id).unwrap().stage, "paused");
+        assert_eq!(get_item(&conn, b.id).unwrap().stage, "paused");
+        assert_eq!(get_item(&conn, c.id).unwrap().stage, "queued");
     }
 
     #[test]

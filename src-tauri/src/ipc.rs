@@ -3,10 +3,11 @@
 //! of its own — state lives in `AppState` (lib.rs) and is only borrowed here.
 
 use crate::binary_manager::{self, BinaryStatus, Which};
-use crate::engine_supervisor::{self, Emitter, SpawnParams};
+use crate::engine_supervisor::Emitter;
 use crate::error::AppError;
 use crate::persistence::{self, Item};
 use crate::progress_parser::{self, ProgressTick};
+use crate::queue_manager::{self, AddDownloadParams, BinaryPaths};
 use crate::settings_service::{self, Settings, SettingsUpdate};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
@@ -103,8 +104,14 @@ pub fn update_settings(
 /// Production-only wiring around `engine_supervisor::Emitter` — the trait
 /// itself stays decoupled from Tauri so engine_supervisor is unit-testable
 /// without a running app (see engine_supervisor.rs's doc comment).
-struct TauriEmitter {
+pub(crate) struct TauriEmitter {
     app: AppHandle,
+}
+
+impl TauriEmitter {
+    pub(crate) fn new(app: AppHandle) -> Self {
+        Self { app }
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -173,9 +180,10 @@ pub struct AddDownloadResponse {
     pub items: Vec<Item>,
 }
 
-/// Adds one download and, if fewer than 2 items are currently
-/// downloading/merging, spawns yt-dlp for it immediately (ARCHITECTURE §7.2,
-/// §5). T2 only ever produces exactly 1 item — playlist expansion (N items)
+/// Adds one download and routes the scheduling decision ("spawn if fewer
+/// than N active, else queue") through `queue_manager` (ARCHITECTURE §7.2,
+/// §4/T3) — ipc.rs only resolves inputs (settings/binary paths) and stays
+/// thin. T2 only ever produces exactly 1 item — playlist expansion (N items)
 /// is T19's job.
 #[tauri::command]
 pub fn add_download(
@@ -220,14 +228,23 @@ pub fn add_download(
         .proxy
         .filter(|s| !s.trim().is_empty())
         .or_else(|| settings.global_proxy.clone());
+    let n_slots = settings.default_concurrency;
 
-    // "spawn if <2 active" — count computed before this row is inserted.
-    let active = persistence::count_active_items(&conn)?;
-    let stage = if active < 2 { "downloading" } else { "queued" };
+    drop(conn);
 
-    let item = persistence::insert_item(
-        &conn,
-        persistence::NewItem {
+    let db = Arc::clone(&state.db);
+    let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter::new(app.clone()));
+    let binaries = BinaryPaths {
+        ytdlp_path,
+        ffmpeg_path,
+    };
+
+    let item = queue_manager::add_and_schedule(
+        db,
+        emitter,
+        binaries,
+        n_slots,
+        AddDownloadParams {
             url: request.url,
             format_expr: request.format_expr,
             output_dir,
@@ -235,32 +252,8 @@ pub fn add_download(
             proxy,
             extra_args: request.extra_args,
             preset_id: request.preset_id,
-            stage: stage.to_string(),
         },
     )?;
-
-    let db = Arc::clone(&state.db);
-    drop(conn);
-
-    let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter { app: app.clone() });
-    emitter.emit_stage_changed(item.id, &item.stage, None);
-
-    if stage == "downloading" {
-        let params = SpawnParams {
-            ytdlp_path,
-            ffmpeg_path,
-            url: item.url.clone(),
-            format_expr: item.format_expr.clone(),
-            output_dir: item.output_dir.clone(),
-            output_template: item.output_template.clone(),
-            proxy: item.proxy.clone(),
-            extra_args: item.extra_args.clone(),
-        };
-        let item_id = item.id;
-        tauri::async_runtime::spawn(async move {
-            engine_supervisor::run_download(db, item_id, params, emitter).await;
-        });
-    }
 
     Ok(AddDownloadResponse { items: vec![item] })
 }
