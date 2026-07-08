@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default permissions for the main window (T0 scaffold — no feature IPC yet)",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

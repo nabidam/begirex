@@ -14,6 +14,7 @@ Requirement ids (K/V/NFR/AC) → PRD.md; screen ids (S1–S7) → UX.md; command
 
 ### T0 — Scaffold + database + seed  *(PLAN Chunk 1)*
 
+- **Status:** ✅ Done — cargo build/test green; `tauri dev` process ran for real and produced `~/.local/share/com.begirex.app/begirex.db` verified via `sqlite3` (criteria 2 & 3 both pass, incl. a real second launch of the compiled binary leaving exactly one `Default` preset); Vite dev server + `vite build` output confirmed dark `#0b1326` background and `Instrument Sans` `@font-face` rules serving from local files. No GUI window was observed by `xdotool`/ImageMagick `import` in this sandboxed shell (window enumeration and screenshot tooling appear non-functional here despite a live `DISPLAY`), so criterion 1's *visual* rendering is inferred from the served CSS/HTML rather than an actual screenshot — caveat this on next real-desktop run.
 - **Objective:** a launchable Tauri 2 + Svelte 5 app whose first run creates and seeds the SQLite DB.
 - **Inputs:** none (greenfield).
 - **Outputs:** running `tauri dev` window; seeded `begirex.db` in app-data dir.

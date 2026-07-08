@@ -1,0 +1,88 @@
+/* app.css — the ONLY file with raw hex/px/font values (CONVENTIONS.md "Styling").
+   Tokens copied verbatim from DESIGN_SYSTEM.md §2, mapped to shadcn-svelte
+   CSS variable names per DESIGN.md §2. Dark-only for 001-core walking skeleton. */
+
+@font-face {
+  font-family: "Instrument Sans";
+  src: url("./assets/fonts/InstrumentSans-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Instrument Sans";
+  src: url("./assets/fonts/InstrumentSans-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Instrument Sans";
+  src: url("./assets/fonts/InstrumentSans-Italic.ttf") format("truetype");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Instrument Sans";
+  src: url("./assets/fonts/InstrumentSans-BoldItalic.ttf") format("truetype");
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  /* ponytail: only Regular weight available locally; label-mono/500 falls back
+     to 400 until real weight files are sourced for a later task. */
+  src: url("./assets/fonts/JetBrainsMono-Regular.ttf") format("truetype");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* shadcn-svelte variable mapping (DESIGN.md §2), raw hex from DESIGN_SYSTEM.md §2 */
+  --background: #0b1326; /* surface */
+  --foreground: #dae2fd; /* on-surface */
+  --card: #131b2e; /* surface-container-low */
+  --card-foreground: #dae2fd; /* on-surface */
+  --popover: #222a3d; /* surface-container-high */
+  --popover-foreground: #dae2fd; /* on-surface */
+  --primary: #c0c1ff; /* primary */
+  --primary-foreground: #1000a9; /* on-primary */
+  --secondary: #39485a; /* secondary-container */
+  --secondary-foreground: #a7b6cc; /* on-secondary-container */
+  --muted: #171f33; /* surface-container */
+  --muted-foreground: #c7c4d7; /* on-surface-variant */
+  --accent: #2d3449; /* surface-container-highest */
+  --accent-foreground: #dae2fd; /* on-surface */
+  --destructive: #93000a; /* error-container */
+  --destructive-foreground: #ffdad6; /* on-error-container */
+  --border: #464554; /* outline-variant */
+  --input: #464554; /* outline-variant */
+  --ring: #c0c1ff; /* primary */
+  --radius: 0.25rem;
+  --surface-lowest: #060e20; /* surface-container-lowest */
+  --surface-high: #222a3d; /* surface-container-high */
+  --warning: #ffb783; /* tertiary */
+  --warning-foreground: #4f2500; /* on-tertiary */
+  --error-token: #ffb4ab; /* error */
+  --error-token-foreground: #690005; /* on-error */
+
+  --font-sans: "Instrument Sans", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+}
