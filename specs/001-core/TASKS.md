@@ -167,6 +167,7 @@ Requirement ids (K/V/NFR/AC) → PRD.md; screen ids (S1–S7) → UX.md; command
 - **Completion artifact:** screenshot showing queued/paused/downloading coexisting after the N=1 change.
 - **Difficulty:** S.
 - **Context pack:** PLAN "Demo Gate 2". No code.
+- **Status:** ✅ Done — user walked journey live, confirmed. No screenshot archived under `specs/001-core/screenshots/` (none provided this pass).
 
 ---
 
