@@ -25,6 +25,10 @@ function createQueueStore() {
   let error = $state<string | null>(null);
   let concurrency = $state<number | null>(null);
   let subscribed = false;
+  // ARCHITECTURE §2: activeDetailId lives in the queue store (S5's drawer
+  // isn't built until T15 — T14's row click/Enter just sets this; nothing
+  // reads it yet).
+  let activeDetailId = $state<number | null>(null);
 
   function patch(id: number, fields: Partial<Item>) {
     // Spreading a key whose value is `undefined` still overwrites (object
@@ -142,6 +146,13 @@ function createQueueStore() {
     if (ok) await refresh();
   }
 
+  // Drag-reorder (T14, V4-AC3) — the drop target is resolved against the
+  // full (unfiltered) item order, matching moveUp/moveDown's own semantics.
+  async function reorderTo(id: number, newPosition: number) {
+    const ok = await runAction(() => reorderItem(id, newPosition));
+    if (ok) await refresh();
+  }
+
   // Toolbar's Start all / Pause all (T13) — operates on whatever id set the
   // caller decides is "visible" (post filter/search); this store just runs
   // the bulk verb and reconciles the returned rows.
@@ -164,6 +175,14 @@ function createQueueStore() {
     if (result) concurrency = result.n;
   }
 
+  function openDetail(id: number) {
+    activeDetailId = id;
+  }
+
+  function closeDetail() {
+    activeDetailId = null;
+  }
+
   return {
     get items() {
       return items;
@@ -174,6 +193,9 @@ function createQueueStore() {
     get concurrency() {
       return concurrency;
     },
+    get activeDetailId() {
+      return activeDetailId;
+    },
     init,
     add,
     pause,
@@ -183,9 +205,13 @@ function createQueueStore() {
     retry,
     moveUp,
     moveDown,
+    reorderTo,
     pauseAll,
     resumeAll,
+    bulk,
     setConcurrency: setConcurrencyLevel,
+    openDetail,
+    closeDetail,
   };
 }
 

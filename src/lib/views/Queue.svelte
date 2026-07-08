@@ -1,11 +1,15 @@
 <script lang="ts">
-  // S2 list (ARCHITECTURE §10 Flow A steps 4-9, TASKS.md T4/T13) — the
-  // queue's rows region only. Shell.svelte (T13) now owns the sidebar,
-  // toolbar, and Add/Presets overlays; this component just renders whatever
-  // `items` (post filter/search) it's handed, plus the two empty-state
-  // copies UX.md distinguishes (no downloads at all vs. filtered-to-empty).
-  // Row internals/virtualization/selection are T14's job, not this one's.
+  // S2 list (UX.md S2, TASKS.md T14) — the queue's rows region: virtualized
+  // list (T10's VirtualList), selection + bulk actions (SelectionBar),
+  // per-row drag-reorder with a movement threshold, roving-tabindex keyboard
+  // nav, and the confirm+undo-toast flow for Cancel/Remove (ARCHITECTURE §8
+  // "soft-delete... hard-delete on toast expiry"). Shell.svelte (T13) owns
+  // the sidebar/toolbar/Add/Presets overlays; this component only renders
+  // whatever `items` (post filter/search) it's handed.
   import { queueStore } from "../stores/queue.svelte";
+  import QueueRow from "../components/QueueRow.svelte";
+  import SelectionBar from "../components/SelectionBar.svelte";
+  import VirtualList from "../components/VirtualList.svelte";
   import type { Item } from "../types";
 
   let {
@@ -20,27 +24,181 @@
     onShowAll: () => void;
   } = $props();
 
-  function formatBytes(bytes: number | null): string {
-    if (bytes == null) return "?";
-    const mb = bytes / (1024 * 1024);
-    return mb >= 1 ? `${mb.toFixed(1)} MB` : `${(bytes / 1024).toFixed(0)} KB`;
+  const ROW_HEIGHT = 56;
+  const TOAST_WINDOW_MS = 5000;
+
+  let listHeight = $state(0);
+  let selectedIds = $state<Set<number>>(new Set());
+  let focusedId = $state<number | null>(null);
+  // Optimistically-hidden ids pending a deferred hard-delete (Remove's
+  // client-side soft-delete window — ARCHITECTURE §8).
+  let hiddenIds = $state<Set<number>>(new Set());
+  let removeTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+  let toast = $state<{ message: string; undo: () => void } | null>(null);
+  let toastTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // Drag-reorder (DESIGN.md §4 gap #4): native pointer events, ~6px
+  // movement threshold — below it, pointerup is treated as a row click.
+  let dragCandidateId = $state<number | null>(null);
+  let dragStartY = 0;
+  let dragActive = $state(false);
+  let dropId = $state<number | null>(null);
+
+  const visible = $derived(items.filter((i) => !hiddenIds.has(i.id)));
+
+  $effect(() => {
+    if (visible.length === 0) {
+      focusedId = null;
+    } else if (focusedId === null || !visible.some((i) => i.id === focusedId)) {
+      focusedId = visible[0].id;
+    }
+  });
+
+  function toggleSelect(id: number) {
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    selectedIds = next;
   }
 
-  function formatSpeed(bps: number | null): string {
-    if (bps == null) return "";
-    return `${(bps / (1024 * 1024)).toFixed(2)} MB/s`;
+  function clearSelection() {
+    selectedIds = new Set();
   }
 
-  function formatEta(seconds: number | null): string {
-    if (seconds == null) return "";
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}:${s.toString().padStart(2, "0")}`;
+  function focusRow(id: number) {
+    focusedId = id;
   }
 
-  // Plain row action buttons (T6 — full selection-bar/drag UI is T14).
-  const ACTIVE_STAGES = new Set(["downloading", "merging"]);
-  const TERMINAL_STAGES = new Set(["completed", "cancelled"]);
+  function onArrow(direction: "up" | "down") {
+    const index = visible.findIndex((i) => i.id === focusedId);
+    if (index === -1) return;
+    const nextIndex = direction === "down" ? index + 1 : index - 1;
+    const next = visible[nextIndex];
+    if (next) focusedId = next.id;
+  }
+
+  $effect(() => {
+    if (focusedId === null) return;
+    const el = document.querySelector<HTMLElement>(`[data-row-id="${focusedId}"]`);
+    el?.focus();
+  });
+
+  function openDetail(id: number) {
+    queueStore.openDetail(id);
+  }
+
+  function onRowPointerDown(id: number, e: PointerEvent) {
+    if (e.button !== 0) return;
+    dragCandidateId = id;
+    dragStartY = e.clientY;
+    dragActive = false;
+  }
+
+  $effect(() => {
+    if (dragCandidateId === null) return;
+    const candidateId = dragCandidateId;
+
+    function onMove(e: PointerEvent) {
+      if (!dragActive && Math.abs(e.clientY - dragStartY) > 6) {
+        dragActive = true;
+      }
+      if (dragActive) {
+        const el = document.elementFromPoint(e.clientX, e.clientY);
+        const rowEl = el instanceof Element ? el.closest("[data-row-id]") : null;
+        dropId = rowEl ? Number(rowEl.getAttribute("data-row-id")) : null;
+      }
+    }
+
+    function onUp() {
+      if (dragActive && dropId !== null && dropId !== candidateId) {
+        const targetItem = queueStore.items.find((i) => i.id === dropId);
+        const targetIndex = targetItem ? queueStore.items.indexOf(targetItem) : -1;
+        if (targetIndex !== -1) queueStore.reorderTo(candidateId, targetIndex);
+      } else if (!dragActive) {
+        openDetail(candidateId);
+      }
+      dragCandidateId = null;
+      dragActive = false;
+      dropId = null;
+    }
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  });
+
+  function showUndoToast(message: string, undo: () => void) {
+    clearTimeout(toastTimer);
+    toast = {
+      message,
+      undo: () => {
+        undo();
+        toast = null;
+      },
+    };
+    toastTimer = setTimeout(() => {
+      toast = null;
+    }, TOAST_WINDOW_MS);
+  }
+
+  function pluralize(n: number, noun: string): string {
+    return `${n} ${noun}${n === 1 ? "" : "s"}`;
+  }
+
+  // ponytail: native confirm() stands in for a proper alert-dialog
+  // component — same precedent as Presets.svelte's delete confirm.
+  // Upgrade path: a shared ConfirmDialog if a second real need appears.
+  async function requestCancel(ids: number[]) {
+    if (ids.length === 0) return;
+    if (!confirm(`Cancel ${pluralize(ids.length, "download")}?`)) return;
+    await queueStore.bulk("cancel", ids);
+    ids.forEach((id) => selectedIds.delete(id));
+    selectedIds = new Set(selectedIds);
+    // ponytail: undo restores via retry_item (stage -> queued), the only
+    // backend verb that reverses a cancel — not necessarily the item's
+    // exact prior stage (e.g. a paused item restores to queued, not
+    // paused). Upgrade path: a dedicated uncancel command if that gap
+    // matters in practice.
+    showUndoToast(`Cancelled ${pluralize(ids.length, "item")}.`, () => {
+      ids.forEach((id) => queueStore.retry(id));
+    });
+  }
+
+  function requestRemove(ids: number[]) {
+    if (ids.length === 0) return;
+    if (!confirm(`Remove ${pluralize(ids.length, "download")}?`)) return;
+    const next = new Set(hiddenIds);
+    ids.forEach((id) => next.add(id));
+    hiddenIds = next;
+    ids.forEach((id) => selectedIds.delete(id));
+    selectedIds = new Set(selectedIds);
+
+    const timer = setTimeout(() => {
+      queueStore.bulk("remove", ids);
+      ids.forEach((id) => removeTimers.delete(id));
+    }, TOAST_WINDOW_MS);
+    ids.forEach((id) => removeTimers.set(id, timer));
+
+    showUndoToast(`Removed ${pluralize(ids.length, "item")}.`, () => {
+      clearTimeout(timer);
+      ids.forEach((id) => removeTimers.delete(id));
+      const restored = new Set(hiddenIds);
+      ids.forEach((id) => restored.delete(id));
+      hiddenIds = restored;
+    });
+  }
+
+  function moveSelected(direction: "up" | "down") {
+    const ids = [...selectedIds];
+    const ordered = direction === "up"
+      ? ids.sort((a, b) => queueStore.items.findIndex((i) => i.id === a) - queueStore.items.findIndex((i) => i.id === b))
+      : ids.sort((a, b) => queueStore.items.findIndex((i) => i.id === b) - queueStore.items.findIndex((i) => i.id === a));
+    ordered.forEach((id) => (direction === "up" ? queueStore.moveUp(id) : queueStore.moveDown(id)));
+  }
 </script>
 
 <main class="queue">
@@ -48,61 +206,93 @@
     <p class="error">{queueStore.error}</p>
   {/if}
 
-  <ul class="items">
-    {#each items as item, index (item.id)}
-      <li class="item">
-        <span class="title">{item.title ?? item.url}</span>
-        <span class="stage">{item.stage}</span>
-        <span class="percent">{item.percent.toFixed(1)}%</span>
-        <span class="bytes">{formatBytes(item.downloaded_bytes)} / {formatBytes(item.total_bytes)}</span>
-        <span class="speed">{formatSpeed(item.speed_bps)}</span>
-        <span class="eta">{formatEta(item.eta_seconds)}</span>
-        {#if item.error_message}
-          <span class="error">{item.error_message}</span>
-        {/if}
-        <span class="actions">
-          {#if ACTIVE_STAGES.has(item.stage)}
-            <button onclick={() => queueStore.pause(item.id)}>Pause</button>
-          {:else if item.stage === "paused"}
-            <button onclick={() => queueStore.resume(item.id)}>Resume</button>
-          {:else if item.stage === "error"}
-            <button onclick={() => queueStore.retry(item.id)}>Retry</button>
-          {/if}
-          {#if item.stage === "queued"}
-            <button disabled={index === 0} onclick={() => queueStore.moveUp(item.id)}>▲</button>
-            <button
-              disabled={index === items.length - 1}
-              onclick={() => queueStore.moveDown(item.id)}
-            >
-              ▼
-            </button>
-          {/if}
-          {#if !TERMINAL_STAGES.has(item.stage)}
-            <button onclick={() => queueStore.cancel(item.id)}>Cancel</button>
-          {/if}
-          <button onclick={() => queueStore.remove(item.id)}>Remove</button>
-        </span>
-      </li>
-    {:else}
+  <SelectionBar
+    count={selectedIds.size}
+    onStart={() => queueStore.bulk("resume", [...selectedIds])}
+    onPause={() => queueStore.bulk("pause", [...selectedIds])}
+    onCancel={() => requestCancel([...selectedIds])}
+    onRemove={() => requestRemove([...selectedIds])}
+    onMoveUp={() => moveSelected("up")}
+    onMoveDown={() => moveSelected("down")}
+    onClear={clearSelection}
+  />
+
+  {#if visible.length > 0}
+    <div class="columns" role="row">
+      <span class="col-checkbox"></span>
+      <span class="col-title">Title</span>
+      <span class="col-size">Size</span>
+      <span class="col-progress">Status</span>
+      <span class="col-eta">ETA</span>
+      <span class="col-actions"></span>
+    </div>
+  {/if}
+
+  <div class="list-wrap" bind:clientHeight={listHeight}>
+    {#if visible.length === 0}
       {#if totalCount === 0}
-        <li class="empty">
+        <p class="empty">
           No downloads yet. Paste a link or press
           <button type="button" class="link-btn" onclick={onAdd}>Add</button> to start.
-        </li>
+        </p>
       {:else}
-        <li class="empty">
+        <p class="empty">
           Nothing here. <button type="button" class="link-btn" onclick={onShowAll}>Show all</button>
-        </li>
+        </p>
       {/if}
-    {/each}
-  </ul>
+    {:else}
+      <VirtualList items={visible} itemHeight={ROW_HEIGHT} height={listHeight}>
+        {#snippet row(item: Item)}
+          <QueueRow
+            {item}
+            selected={selectedIds.has(item.id)}
+            focused={focusedId === item.id}
+            onToggleSelect={toggleSelect}
+            onPointerDown={onRowPointerDown}
+            {onArrow}
+            onOpenDetail={openDetail}
+            onFocusRow={focusRow}
+            onCancelRequest={requestCancel}
+            onRemoveRequest={requestRemove}
+          />
+        {/snippet}
+      </VirtualList>
+    {/if}
+  </div>
+
+  {#if toast}
+    <div class="toast" role="status">
+      <span>{toast.message}</span>
+      <button type="button" class="undo" onclick={() => toast?.undo()}>Undo</button>
+    </div>
+  {/if}
 </main>
 
 <style>
   .queue {
-    max-width: 48rem;
-    margin: 2rem auto;
-    padding: 1.5rem;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .list-wrap {
+    flex: 1;
+    min-height: 0;
+    padding: 0.5rem 1rem;
+  }
+  .columns {
+    display: grid;
+    grid-template-columns: 2rem minmax(6rem, 1fr) 4.5rem minmax(12rem, 2fr) 3.5rem 2.5rem;
+    gap: 0.75rem;
+    padding: 0 1.6rem;
+    color: var(--muted-foreground);
+    font-size: 0.75em;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+  .col-size,
+  .col-eta {
+    text-align: end;
   }
   .link-btn {
     background: none;
@@ -117,59 +307,40 @@
     outline: 2px solid var(--ring);
     outline-offset: 2px;
   }
-  button {
-    background: var(--input);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 0.4rem 0.6rem;
-    font-family: var(--font-sans);
-  }
-  button {
-    cursor: pointer;
-  }
-  button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  .items {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-  .item {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-    align-items: baseline;
-    background: var(--card);
-    color: var(--card-foreground);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 0.6rem 0.9rem;
-    margin-bottom: 0.5rem;
-  }
-  .title {
-    font-weight: 700;
-    flex-basis: 100%;
-  }
-  .stage {
-    font-family: var(--font-mono);
-    color: var(--primary);
-  }
   .empty {
     color: var(--muted-foreground);
+    text-align: center;
+    padding: 2rem 1rem;
   }
   .error {
     color: var(--error-token);
+    padding: 0.5rem 1rem;
   }
-  .actions {
+  .toast {
+    position: fixed;
+    inset-block-end: 1.5rem;
+    inset-inline-start: 50%;
+    transform: translateX(-50%);
     display: flex;
-    gap: 0.4rem;
-    flex-basis: 100%;
+    align-items: center;
+    gap: 0.75rem;
+    background: var(--surface-high);
+    color: var(--foreground);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.6rem 1rem;
+    z-index: 40;
   }
-  .actions button {
-    padding: 0.2rem 0.5rem;
-    font-size: 0.85em;
+  .undo {
+    background: transparent;
+    border: none;
+    color: var(--primary);
+    font-weight: 700;
+    cursor: pointer;
+    padding: 0;
+  }
+  .undo:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
   }
 </style>
