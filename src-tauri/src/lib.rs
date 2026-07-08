@@ -70,6 +70,7 @@ pub fn run() {
             ipc::update_preset,
             ipc::delete_preset,
             ipc::set_default_preset,
+            ipc::open_path,
         ])
         .setup(|app| {
             let app_data_dir = app

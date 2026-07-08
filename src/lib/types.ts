@@ -174,3 +174,17 @@ export interface ProbeFormatsResponse {
   title: string;
   formats: Format[];
 }
+
+// persistence.rs's LogLine (S5 log tail, T7/T15).
+export interface LogLine {
+  ts: number;
+  stream: string;
+  line: string;
+}
+
+// ipc.rs's LogLinePayload.
+export interface LogLineEvent {
+  id: number;
+  stream: string;
+  line: string;
+}

@@ -10,6 +10,7 @@
   import Sidebar from "../components/Sidebar.svelte";
   import QueueToolbar from "../components/QueueToolbar.svelte";
   import Queue from "./Queue.svelte";
+  import DetailDrawer from "./DetailDrawer.svelte";
   import AddDownload from "./AddDownload.svelte";
   import Presets from "./Presets.svelte";
 
@@ -42,6 +43,8 @@
     <Queue items={visibleItems} totalCount={queueStore.items.length} onAdd={openAdd} onShowAll={showAll} />
   </div>
 </div>
+
+<DetailDrawer />
 
 <AddDownload bind:open={showAddDownload} />
 

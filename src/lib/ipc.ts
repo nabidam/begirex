@@ -12,6 +12,8 @@ import type {
   CreatePresetRequest,
   Item,
   ItemRemovedEvent,
+  LogLine,
+  LogLineEvent,
   Preset,
   PresetListResponse,
   ProbeFormatsRequest,
@@ -66,6 +68,10 @@ export function addDownload(request: AddDownloadRequest): Promise<{ items: Item[
 
 export function listItems(filter?: string): Promise<Item[]> {
   return call<Item[]>("list_items", { request: { filter: filter ?? null } });
+}
+
+export function getItem(id: number): Promise<Item> {
+  return call<Item>("get_item", { request: { id } });
 }
 
 // Native file picker for Onboarding's "Set path…" (Tauri 2's standard dialog
@@ -123,6 +129,26 @@ export function bulkAction(request: BulkActionRequest): Promise<{ updated: Item[
 
 export function setConcurrency(n: number): Promise<{ n: number }> {
   return call<{ n: number }>("set_concurrency", { request: { n } });
+}
+
+// --- T15: S5 detail drawer ---------------------------------------------------
+
+export function getItemLog(id: number, tail?: number): Promise<LogLine[]> {
+  return call<LogLine[]>("get_item_log", { request: { id, tail: tail ?? null } });
+}
+
+// Toggles whether `log_line` events fire for `id` — call with `on:true` when
+// the drawer's log disclosure opens, `on:false` when it closes/unmounts.
+export function watchLog(id: number, on: boolean): Promise<{ ok: boolean }> {
+  return call<{ ok: boolean }>("watch_log", { request: { id, on } });
+}
+
+export function onLogLine(cb: (payload: LogLineEvent) => void): Promise<UnlistenFn> {
+  return listen<LogLineEvent>("log_line", (event) => cb(event.payload));
+}
+
+export function openPath(path: string, reveal?: boolean): Promise<{ ok: boolean }> {
+  return call<{ ok: boolean }>("open_path", { request: { path, reveal: reveal ?? null } });
 }
 
 // --- T9: probe (S3/S4) -------------------------------------------------------

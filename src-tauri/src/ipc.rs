@@ -732,6 +732,62 @@ pub fn set_default_preset(state: State<AppState>, request: GetItemRequest) -> Re
     Ok(PresetListResponse { presets })
 }
 
+// --- T15: S5 detail drawer — open_path (ARCHITECTURE §7.2) ------------------
+
+#[derive(Debug, Deserialize)]
+pub struct OpenPathRequest {
+    pub path: String,
+    pub reveal: Option<bool>,
+}
+
+/// `reveal:true` opens the path's parent directory (used for a completed
+/// item's "Open folder"); otherwise opens the path itself ("Open file", or
+/// a plain directory like `output_dir`). Pure so it's unit-testable without
+/// shelling out.
+fn resolve_open_target(path: &str, reveal: bool) -> std::path::PathBuf {
+    if reveal {
+        match std::path::Path::new(path).parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+            _ => std::path::PathBuf::from(path),
+        }
+    } else {
+        std::path::PathBuf::from(path)
+    }
+}
+
+/// ponytail: shells out to the OS's default opener rather than adding a
+/// cross-platform "opener" crate — Linux (`xdg-open`) is this project's
+/// primary target (no other runtime dep added anywhere else either); the
+/// macOS/Windows branches are the standard `open`/`explorer` invocations,
+/// untested on those OSes. Upgrade path: `tauri-plugin-opener` if a real
+/// cross-platform gap shows up.
+#[tauri::command]
+pub fn open_path(request: OpenPathRequest) -> Result<OkResponse, AppError> {
+    if request.path.trim().is_empty() {
+        return Err(AppError::Validation {
+            message: "path must not be empty".into(),
+        });
+    }
+    let target = resolve_open_target(&request.path, request.reveal.unwrap_or(false));
+
+    #[cfg(target_os = "linux")]
+    let result = std::process::Command::new("xdg-open").arg(&target).status();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(&target).status();
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("explorer").arg(&target).status();
+
+    match result {
+        Ok(status) if status.success() => Ok(OkResponse { ok: true }),
+        Ok(status) => Err(AppError::IoError {
+            message: format!("failed to open '{}': exited with {status}", target.display()),
+        }),
+        Err(err) => Err(AppError::IoError {
+            message: format!("failed to open '{}': {err}", target.display()),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -785,5 +841,23 @@ mod tests {
         new_test_item(&conn, "https://dup", "queued");
 
         check_duplicate(&conn, "https://different", false).unwrap();
+    }
+
+    #[test]
+    fn resolve_open_target_without_reveal_returns_path_itself() {
+        let target = resolve_open_target("/tmp/out/video.mp4", false);
+        assert_eq!(target, std::path::PathBuf::from("/tmp/out/video.mp4"));
+    }
+
+    #[test]
+    fn resolve_open_target_with_reveal_returns_parent_dir() {
+        let target = resolve_open_target("/tmp/out/video.mp4", true);
+        assert_eq!(target, std::path::PathBuf::from("/tmp/out"));
+    }
+
+    #[test]
+    fn resolve_open_target_with_reveal_falls_back_when_no_parent() {
+        let target = resolve_open_target("video.mp4", true);
+        assert_eq!(target, std::path::PathBuf::from("video.mp4"));
     }
 }
