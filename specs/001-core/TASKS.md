@@ -105,6 +105,7 @@ Requirement ids (K/V/NFR/AC) → PRD.md; screen ids (S1–S7) → UX.md; command
 
 ### T5 — 🚦 DEMO GATE 1 — walking skeleton (kernel journey, minimal)
 
+- **Status:** ✅ Done — user walked journey manually.
 - **Objective:** prove the kernel journey passes end-to-end in the real app.
 - **Dependencies:** T4.
 - **Journey to walk (exact):** launch light build where ffmpeg is not configured → S1-minimal shows it missing → **Set path…** to a real ffmpeg + enter a proxy → Continue → paste video URL, keep or edit prefilled expression → Add → paste second URL → Add → **observe both rows' percent advancing simultaneously** → quit mid-download → relaunch → **observe both resume from prior progress, not 0%** → wait → both `completed`, files on disk at templated path.
