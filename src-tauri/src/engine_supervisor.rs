@@ -7,11 +7,13 @@ use crate::error::AppError;
 use crate::persistence;
 use crate::progress_parser::{self, ProgressTick};
 use rusqlite::Connection;
+use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
+use tokio::process::{Child, Command};
+use tokio::sync::Mutex as AsyncMutex;
 
 /// Emits `progress`/`stage_changed` events (ARCHITECTURE §7.3). Kept as a
 /// small trait rather than taking `tauri::AppHandle` directly, so this
@@ -21,6 +23,96 @@ use tokio::process::Command;
 pub trait Emitter: Send + Sync {
     fn emit_progress(&self, item_id: i64, tick: &ProgressTick);
     fn emit_stage_changed(&self, item_id: i64, stage: &str, error_message: Option<&str>);
+    fn emit_item_added(&self, item: &persistence::Item);
+    fn emit_item_removed(&self, item_id: i64);
+}
+
+/// Why a still-running child was killed — distinguishes an intentional
+/// pause/cancel from a real engine failure once `run_download_inner`'s loop
+/// exits, so it doesn't overwrite the pause/cancel command's own DB write
+/// with an `error` stage (ARCHITECTURE §2: engine_supervisor owns
+/// pause/cancel/resume).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum KillReason {
+    Paused,
+    Cancelled,
+}
+
+/// One entry per currently-spawned child (T6 pause/cancel — ARCHITECTURE §2:
+/// "hold the child handle"). `child` is behind an async mutex so pause/cancel
+/// commands (running on a different task than the download loop) can signal
+/// it; `kill_reason` is checked by the download loop itself right before it
+/// would otherwise report `completed`/`error`; `partial_paths` collects every
+/// "[download] Destination: …" line yt-dlp prints, so cancel can delete the
+/// partial file(s) it was writing.
+#[derive(Clone)]
+pub struct ActiveEntry {
+    child: Arc<AsyncMutex<Child>>,
+    kill_reason: Arc<Mutex<Option<KillReason>>>,
+    partial_paths: Arc<Mutex<Vec<String>>>,
+}
+
+/// Registry of currently-spawned children, keyed by item id. Shared between
+/// `queue_manager` (which owns one, in `AppState`) and this module's
+/// pause/cancel/run_download so a command handler on one task can kill a
+/// child a `run_download` task on another task is supervising.
+pub type ActiveRegistry = Arc<Mutex<HashMap<i64, ActiveEntry>>>;
+
+/// Kills the running child for `item_id`, marking the kill as a pause so
+/// `run_download`'s own exit handling doesn't report it as `error`. Returns
+/// `Ok(false)` (a no-op) if the item has no running child — callers only
+/// need to kill items currently `downloading`/`merging`.
+pub async fn pause(registry: &ActiveRegistry, item_id: i64) -> Result<bool, AppError> {
+    kill(registry, item_id, KillReason::Paused).await
+}
+
+/// Kills the running child for `item_id` (marking the kill as a cancel) and
+/// deletes whatever partial file(s) it was writing. Returns `Ok(false)` if
+/// the item has no running child.
+pub async fn cancel(registry: &ActiveRegistry, item_id: i64) -> Result<bool, AppError> {
+    // Grab a clone of the `Arc` *before* killing — `kill` awaits the child's
+    // full exit, and the instant `run_download`'s wrapper observes that exit
+    // it removes this item's entry from the registry (on a different task).
+    // Looking the entry up again afterward would race that removal and could
+    // read back an empty registry with the destination path already gone;
+    // holding our own `Arc` to the same underlying `Vec` sidesteps the race
+    // entirely — it stays readable regardless of when the entry is dropped.
+    let partial_paths = registry
+        .lock()
+        .unwrap()
+        .get(&item_id)
+        .map(|e| Arc::clone(&e.partial_paths));
+
+    let killed = kill(registry, item_id, KillReason::Cancelled).await?;
+    if killed {
+        let paths = partial_paths
+            .map(|p| p.lock().unwrap().clone())
+            .unwrap_or_default();
+        for path in paths {
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(format!("{path}.part"));
+        }
+    }
+    Ok(killed)
+}
+
+async fn kill(registry: &ActiveRegistry, item_id: i64, reason: KillReason) -> Result<bool, AppError> {
+    let entry = registry.lock().unwrap().get(&item_id).cloned();
+    let Some(entry) = entry else {
+        return Ok(false);
+    };
+    *entry.kill_reason.lock().unwrap() = Some(reason);
+    let mut child = entry.child.lock().await;
+    child.start_kill().map_err(|e| AppError::ProcessError {
+        message: format!("failed to kill child for item {item_id}: {e}"),
+        stderr: None,
+    })?;
+    // Wait for the actual exit before returning: callers (cancel's partial-
+    // file cleanup, resume's re-spawn) both need the guarantee that the old
+    // process is truly gone and no longer writing to the output file —
+    // `start_kill` alone only *requests* termination, it doesn't wait for it.
+    let _ = child.wait().await;
+    Ok(true)
 }
 
 /// Resolved spawn arguments for one item. Already defaulted/validated by the
@@ -58,8 +150,11 @@ pub async fn run_download(
     item_id: i64,
     params: SpawnParams,
     emitter: Arc<dyn Emitter>,
+    registry: ActiveRegistry,
 ) {
-    if let Err(err) = run_download_inner(&db, item_id, &params, emitter.as_ref()).await {
+    let result = run_download_inner(&db, item_id, &params, emitter.as_ref(), &registry).await;
+    registry.lock().unwrap().remove(&item_id);
+    if let Err(err) = result {
         let message = err.to_string();
         if let Ok(conn) = db.lock() {
             let _ = persistence::finish_item(&conn, item_id, "error", None, Some(&message));
@@ -73,6 +168,7 @@ async fn run_download_inner(
     item_id: i64,
     params: &SpawnParams,
     emitter: &dyn Emitter,
+    registry: &ActiveRegistry,
 ) -> Result<(), AppError> {
     let output_template_path = format!("{}/{}", params.output_dir, params.output_template);
 
@@ -97,7 +193,17 @@ async fn run_download_inner(
         // ourselves (which would require re-implementing yt-dlp's output
         // template engine).
         .arg("--print")
-        .arg("after_move:filepath");
+        .arg("after_move:filepath")
+        // T6 cancel/remove need the partial file's path to delete it.
+        // Confirmed in this sandbox: yt-dlp's usual "[download] Destination:
+        // …" status line is suppressed entirely once any `--print` flag is
+        // present, so a dedicated `before_dl` print (prefixed so it can't be
+        // confused with the `after_move` line above, since both are bare
+        // lines with no "[" prefix) is the reliable way to learn it instead.
+        // `%(filepath)s` isn't resolved yet at `before_dl` (prints "NA");
+        // `%(_filename)s` is (also confirmed against a real download).
+        .arg("--print")
+        .arg("before_dl:BEGIREX_PARTIAL_PATH:%(_filename)s");
 
     if let Some(proxy) = params.proxy.as_deref().filter(|p| !p.is_empty()) {
         cmd.arg("--proxy").arg(proxy);
@@ -117,6 +223,21 @@ async fn run_download_inner(
 
     let stdout = child.stdout.take().expect("stdout piped at spawn");
     let stderr = child.stderr.take().expect("stderr piped at spawn");
+
+    // Registered *after* taking the pipes (still needs the owned `child`
+    // value below) so pause/cancel can find and kill this child (T6 —
+    // ARCHITECTURE §2 "hold the child handle").
+    let kill_reason: Arc<Mutex<Option<KillReason>>> = Arc::new(Mutex::new(None));
+    let partial_paths: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let child_handle = Arc::new(AsyncMutex::new(child));
+    registry.lock().unwrap().insert(
+        item_id,
+        ActiveEntry {
+            child: Arc::clone(&child_handle),
+            kill_reason: Arc::clone(&kill_reason),
+            partial_paths: Arc::clone(&partial_paths),
+        },
+    );
 
     // Drain stderr concurrently (into item_logs, verbatim) while the main
     // task drains stdout progress — avoids the two pipes deadlocking each
@@ -142,6 +263,16 @@ async fn run_download_inner(
 
     let mut stdout_lines = BufReader::new(stdout).lines();
     while let Ok(Some(text)) = stdout_lines.next_line().await {
+        if kill_reason.lock().unwrap().is_some() {
+            // Pause/cancel already requested — stop acting on further output
+            // (the process is dying); the pause/cancel command owns the DB
+            // write and emitted event from here.
+            break;
+        }
+        if let Some(dest) = text.trim().strip_prefix("BEGIREX_PARTIAL_PATH:") {
+            partial_paths.lock().unwrap().push(dest.to_string());
+            continue;
+        }
         if let Some(tick) = progress_parser::parse_line(&text) {
             let stage_str = match tick.stage {
                 progress_parser::Stage::Downloading => "downloading",
@@ -189,10 +320,21 @@ async fn run_download_inner(
     }
 
     let stderr_lines = stderr_task.await.unwrap_or_default();
-    let status = child.wait().await.map_err(|e| AppError::ProcessError {
-        message: format!("failed waiting on yt-dlp: {e}"),
-        stderr: None,
-    })?;
+    let status = {
+        let mut child = child_handle.lock().await;
+        child.wait().await.map_err(|e| AppError::ProcessError {
+            message: format!("failed waiting on yt-dlp: {e}"),
+            stderr: None,
+        })?
+    };
+
+    // An intentional pause/cancel already made its own DB write + emitted
+    // event (queue_manager's pause_item/cancel_item) — this exit is expected,
+    // not a completion or a failure, so don't overwrite that with
+    // completed/error.
+    if kill_reason.lock().unwrap().is_some() {
+        return Ok(());
+    }
 
     if status.success() {
         let conn = db.lock().expect("db mutex poisoned");
@@ -245,6 +387,8 @@ mod tests {
                 error_message.map(|s| s.to_string()),
             ));
         }
+        fn emit_item_added(&self, _item: &persistence::Item) {}
+        fn emit_item_removed(&self, _item_id: i64) {}
     }
 
     #[test]

@@ -2,7 +2,20 @@
 // items in place from progress/stage_changed events. Frontend never
 // computes durable truth: every field written here is a value the backend
 // already emitted or returned.
-import { addDownload, listItems, onProgress, onStageChanged } from "../ipc";
+import {
+  addDownload,
+  cancelItem,
+  listItems,
+  onItemAdded,
+  onItemRemoved,
+  onProgress,
+  onStageChanged,
+  pauseItem,
+  removeItem,
+  reorderItem,
+  resumeItem,
+  retryItem,
+} from "../ipc";
 import type { AddDownloadRequest, AppError, Item } from "../types";
 
 function createQueueStore() {
@@ -20,13 +33,29 @@ function createQueueStore() {
     items = items.map((item) => (item.id === id ? { ...item, ...defined } : item));
   }
 
-  async function init() {
+  // Idempotent add — both the direct `add_download` response and the
+  // `item_added` event can deliver the same row; whichever arrives first
+  // wins the insert, the other just patches in place (no duplicate row).
+  function upsert(item: Item) {
+    const exists = items.some((i) => i.id === item.id);
+    items = exists ? items.map((i) => (i.id === item.id ? item : i)) : [...items, item];
+  }
+
+  function removeLocally(id: number) {
+    items = items.filter((i) => i.id !== id);
+  }
+
+  async function refresh() {
     error = null;
     try {
       items = await listItems();
     } catch (err) {
       error = (err as AppError).message;
     }
+  }
+
+  async function init() {
+    await refresh();
 
     if (subscribed) return;
     subscribed = true;
@@ -43,17 +72,71 @@ function createQueueStore() {
     await onStageChanged((payload) => {
       patch(payload.id, { stage: payload.stage, error_message: payload.error_message });
     });
+    await onItemAdded((item) => upsert(item));
+    await onItemRemoved((payload) => removeLocally(payload.id));
   }
 
   async function add(request: AddDownloadRequest) {
     error = null;
     try {
       const { items: added } = await addDownload(request);
-      items = [...items, ...added];
+      added.forEach(upsert);
     } catch (err) {
       error = (err as AppError).message;
       throw err;
     }
+  }
+
+  async function runAction<T>(action: () => Promise<T>): Promise<T | undefined> {
+    error = null;
+    try {
+      return await action();
+    } catch (err) {
+      error = (err as AppError).message;
+      return undefined;
+    }
+  }
+
+  async function pause(id: number) {
+    const item = await runAction(() => pauseItem(id));
+    if (item) upsert(item);
+  }
+
+  async function resume(id: number) {
+    const item = await runAction(() => resumeItem(id));
+    if (item) upsert(item);
+  }
+
+  async function cancel(id: number) {
+    const item = await runAction(() => cancelItem(id));
+    if (item) upsert(item);
+  }
+
+  async function remove(id: number) {
+    const ok = await runAction(() => removeItem(id));
+    if (ok) removeLocally(id);
+  }
+
+  async function retry(id: number) {
+    const item = await runAction(() => retryItem(id));
+    if (item) upsert(item);
+  }
+
+  // Buttons move an item by one slot among *all* items (matching the
+  // backend's absolute-index reorder semantics) — full drag reordering is
+  // T14.
+  async function moveUp(id: number) {
+    const index = items.findIndex((i) => i.id === id);
+    if (index <= 0) return;
+    const ok = await runAction(() => reorderItem(id, index - 1));
+    if (ok) await refresh();
+  }
+
+  async function moveDown(id: number) {
+    const index = items.findIndex((i) => i.id === id);
+    if (index === -1 || index >= items.length - 1) return;
+    const ok = await runAction(() => reorderItem(id, index + 1));
+    if (ok) await refresh();
   }
 
   return {
@@ -65,6 +148,13 @@ function createQueueStore() {
     },
     init,
     add,
+    pause,
+    resume,
+    cancel,
+    remove,
+    retry,
+    moveUp,
+    moveDown,
   };
 }
 

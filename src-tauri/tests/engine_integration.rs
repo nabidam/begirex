@@ -22,10 +22,18 @@
 //!   YouTube videos and none is installed — confirmed via `which deno`).
 
 use begirex_lib::engine_supervisor::{self, Emitter, SpawnParams};
-use begirex_lib::persistence::{self, NewItem};
+use begirex_lib::persistence::{self, Item, NewItem};
 use begirex_lib::progress_parser::ProgressTick;
+use std::collections::HashMap;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
+
+/// Fresh, empty per-test registry (T6) — these T2 tests don't exercise
+/// pause/cancel, they just need something to satisfy `run_download`'s
+/// now-required registry param.
+fn empty_registry() -> engine_supervisor::ActiveRegistry {
+    Arc::new(Mutex::new(HashMap::new()))
+}
 
 const TEST_URL: &str = "https://download.samplelib.com/mp4/sample-5s.mp4";
 
@@ -74,6 +82,8 @@ impl Emitter for RecordingEmitter {
             .unwrap()
             .push((stage.to_string(), error_message.map(|s| s.to_string())));
     }
+    fn emit_item_added(&self, _item: &Item) {}
+    fn emit_item_removed(&self, _item_id: i64) {}
 }
 
 #[tokio::test]
@@ -117,6 +127,7 @@ async fn add_download_completes_with_monotonic_progress_and_file_on_disk() {
             extra_args: None,
         },
         Arc::clone(&emitter) as Arc<dyn Emitter>,
+        empty_registry(),
     )
     .await;
 
@@ -204,6 +215,7 @@ async fn invalid_format_expr_yields_error_stage_with_real_stderr() {
             extra_args: None,
         },
         Arc::clone(&emitter) as Arc<dyn Emitter>,
+        empty_registry(),
     )
     .await;
 

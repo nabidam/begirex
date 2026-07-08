@@ -8,7 +8,9 @@ import type {
   AppError,
   BinaryStatus,
   BinaryStatuses,
+  BulkActionRequest,
   Item,
+  ItemRemovedEvent,
   ProgressEvent,
   Settings,
   SettingsUpdate,
@@ -73,4 +75,46 @@ export function onProgress(cb: (payload: ProgressEvent) => void): Promise<Unlist
 
 export function onStageChanged(cb: (payload: StageChangedEvent) => void): Promise<UnlistenFn> {
   return listen<StageChangedEvent>("stage_changed", (event) => cb(event.payload));
+}
+
+export function onItemAdded(cb: (payload: Item) => void): Promise<UnlistenFn> {
+  return listen<Item>("item_added", (event) => cb(event.payload));
+}
+
+export function onItemRemoved(cb: (payload: ItemRemovedEvent) => void): Promise<UnlistenFn> {
+  return listen<ItemRemovedEvent>("item_removed", (event) => cb(event.payload));
+}
+
+// --- T6: queue lifecycle ----------------------------------------------------
+
+export function pauseItem(id: number): Promise<Item> {
+  return call<Item>("pause_item", { request: { id } });
+}
+
+export function resumeItem(id: number): Promise<Item> {
+  return call<Item>("resume_item", { request: { id } });
+}
+
+export function cancelItem(id: number): Promise<Item> {
+  return call<Item>("cancel_item", { request: { id } });
+}
+
+export function removeItem(id: number): Promise<{ ok: boolean }> {
+  return call<{ ok: boolean }>("remove_item", { request: { id } });
+}
+
+export function retryItem(id: number): Promise<Item> {
+  return call<Item>("retry_item", { request: { id } });
+}
+
+export function reorderItem(id: number, newPosition: number): Promise<{ ok: boolean }> {
+  return call<{ ok: boolean }>("reorder_item", { request: { id, new_position: newPosition } });
+}
+
+export function bulkAction(request: BulkActionRequest): Promise<{ updated: Item[] }> {
+  return call<{ updated: Item[] }>("bulk_action", { request });
+}
+
+export function setConcurrency(n: number): Promise<{ n: number }> {
+  return call<{ n: number }>("set_concurrency", { request: { n } });
 }

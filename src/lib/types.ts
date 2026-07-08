@@ -104,3 +104,13 @@ export interface StageChangedEvent {
   stage: string;
   error_message: string | null;
 }
+
+// ipc.rs's ItemRemovedPayload; item_added carries the full Item verbatim.
+export interface ItemRemovedEvent {
+  id: number;
+}
+
+export interface BulkActionRequest {
+  ids: number[];
+  action: "pause" | "resume" | "cancel" | "remove";
+}

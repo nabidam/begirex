@@ -10,10 +10,11 @@ pub mod progress_parser;
 pub mod queue_manager;
 pub mod settings_service;
 
-use engine_supervisor::Emitter;
+use engine_supervisor::{ActiveRegistry, Emitter};
 use ipc::TauriEmitter;
 use queue_manager::BinaryPaths;
 use rusqlite::Connection;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
@@ -25,8 +26,14 @@ use tauri::Manager;
 /// clone the connection handle into a `tauri::async_runtime::spawn`ed task
 /// that outlives the command call — everything else still calls
 /// `state.db.lock()` unchanged since `Arc` derefs to `Mutex`.
+///
+/// `registry` (T6) is the in-process record of currently-spawned children —
+/// shared with `engine_supervisor`/`queue_manager` so pause/cancel command
+/// handlers can find and kill the child a `run_download` task elsewhere is
+/// supervising.
 pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
+    pub registry: ActiveRegistry,
 }
 
 pub fn run() {
@@ -41,6 +48,14 @@ pub fn run() {
             ipc::add_download,
             ipc::list_items,
             ipc::get_item,
+            ipc::pause_item,
+            ipc::resume_item,
+            ipc::cancel_item,
+            ipc::remove_item,
+            ipc::retry_item,
+            ipc::reorder_item,
+            ipc::bulk_action,
+            ipc::set_concurrency,
         ])
         .setup(|app| {
             let app_data_dir = app
@@ -59,7 +74,11 @@ pub fn run() {
                 .expect("failed to open/migrate/seed database");
 
             let db = Arc::new(Mutex::new(conn));
-            app.manage(AppState { db: Arc::clone(&db) });
+            let registry: ActiveRegistry = Arc::new(Mutex::new(HashMap::new()));
+            app.manage(AppState {
+                db: Arc::clone(&db),
+                registry: Arc::clone(&registry),
+            });
 
             // T3 launch reconcile (ARCHITECTURE §8): any item left
             // `downloading`/`merging` from a prior crash gets paused (so
@@ -92,7 +111,7 @@ pub fn run() {
                 };
                 let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter::new(app_handle));
                 let binaries = BinaryPaths { ytdlp_path, ffmpeg_path };
-                let _ = queue_manager::reconcile_and_resume(db, emitter, binaries, n_slots);
+                let _ = queue_manager::reconcile_and_resume(db, emitter, binaries, n_slots, registry);
             });
 
             Ok(())

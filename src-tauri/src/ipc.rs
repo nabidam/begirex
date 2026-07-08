@@ -7,7 +7,7 @@ use crate::engine_supervisor::Emitter;
 use crate::error::AppError;
 use crate::persistence::{self, Item};
 use crate::progress_parser::{self, ProgressTick};
-use crate::queue_manager::{self, AddDownloadParams, BinaryPaths};
+use crate::queue_manager::{self, AddDownloadParams, BinaryPaths, BulkVerb};
 use crate::settings_service::{self, Settings, SettingsUpdate};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
@@ -162,6 +162,19 @@ impl Emitter for TauriEmitter {
             },
         );
     }
+
+    fn emit_item_added(&self, item: &Item) {
+        let _ = self.app.emit("item_added", item);
+    }
+
+    fn emit_item_removed(&self, item_id: i64) {
+        let _ = self.app.emit("item_removed", ItemRemovedPayload { id: item_id });
+    }
+}
+
+#[derive(Serialize, Clone)]
+struct ItemRemovedPayload {
+    id: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -253,9 +266,202 @@ pub fn add_download(
             extra_args: request.extra_args,
             preset_id: request.preset_id,
         },
+        Arc::clone(&state.registry),
     )?;
 
     Ok(AddDownloadResponse { items: vec![item] })
+}
+
+/// Resolves the binary paths + current concurrency the T6 lifecycle
+/// commands need to (re)spawn a download — the same lookup `add_download`
+/// already does inline, factored out since five more commands need it.
+fn resolve_runtime(conn: &rusqlite::Connection) -> Result<(BinaryPaths, i64), AppError> {
+    let settings = settings_service::get_settings(conn)?;
+    let ytdlp_path = binary_manager::detect(conn, &Which::Ytdlp)?
+        .path
+        .ok_or_else(|| AppError::BinaryNotFound {
+            message: "yt-dlp not found; set its path in Settings".into(),
+        })?;
+    let ffmpeg_path = binary_manager::detect(conn, &Which::Ffmpeg)?
+        .path
+        .ok_or_else(|| AppError::BinaryNotFound {
+            message: "ffmpeg not found; set its path in Settings".into(),
+        })?;
+    Ok((
+        BinaryPaths {
+            ytdlp_path,
+            ffmpeg_path,
+        },
+        settings.default_concurrency,
+    ))
+}
+
+#[derive(Debug, Serialize)]
+pub struct OkResponse {
+    pub ok: bool,
+}
+
+#[tauri::command]
+pub async fn pause_item(app: AppHandle, state: State<'_, AppState>, request: GetItemRequest) -> Result<Item, AppError> {
+    let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter::new(app));
+    queue_manager::pause_item(Arc::clone(&state.db), emitter, Arc::clone(&state.registry), request.id).await
+}
+
+#[tauri::command]
+pub fn resume_item(app: AppHandle, state: State<AppState>, request: GetItemRequest) -> Result<Item, AppError> {
+    let (binaries, n_slots) = {
+        let conn = state.db.lock().expect("db mutex poisoned");
+        resolve_runtime(&conn)?
+    };
+    let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter::new(app));
+    queue_manager::resume_item(
+        Arc::clone(&state.db),
+        emitter,
+        binaries,
+        n_slots,
+        Arc::clone(&state.registry),
+        request.id,
+    )
+}
+
+#[tauri::command]
+pub async fn cancel_item(app: AppHandle, state: State<'_, AppState>, request: GetItemRequest) -> Result<Item, AppError> {
+    let (binaries, n_slots) = {
+        let conn = state.db.lock().expect("db mutex poisoned");
+        resolve_runtime(&conn)?
+    };
+    let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter::new(app));
+    queue_manager::cancel_item(
+        Arc::clone(&state.db),
+        emitter,
+        binaries,
+        n_slots,
+        Arc::clone(&state.registry),
+        request.id,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn remove_item(app: AppHandle, state: State<'_, AppState>, request: GetItemRequest) -> Result<OkResponse, AppError> {
+    let (binaries, n_slots) = {
+        let conn = state.db.lock().expect("db mutex poisoned");
+        resolve_runtime(&conn)?
+    };
+    let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter::new(app));
+    queue_manager::remove_item(
+        Arc::clone(&state.db),
+        emitter,
+        binaries,
+        n_slots,
+        Arc::clone(&state.registry),
+        request.id,
+    )
+    .await?;
+    Ok(OkResponse { ok: true })
+}
+
+#[tauri::command]
+pub fn retry_item(app: AppHandle, state: State<AppState>, request: GetItemRequest) -> Result<Item, AppError> {
+    let (binaries, n_slots) = {
+        let conn = state.db.lock().expect("db mutex poisoned");
+        resolve_runtime(&conn)?
+    };
+    let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter::new(app));
+    queue_manager::retry_item(
+        Arc::clone(&state.db),
+        emitter,
+        binaries,
+        n_slots,
+        Arc::clone(&state.registry),
+        request.id,
+    )
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReorderItemRequest {
+    pub id: i64,
+    pub new_position: i64,
+}
+
+#[tauri::command]
+pub fn reorder_item(state: State<AppState>, request: ReorderItemRequest) -> Result<OkResponse, AppError> {
+    queue_manager::reorder_item(Arc::clone(&state.db), request.id, request.new_position)?;
+    Ok(OkResponse { ok: true })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BulkActionRequest {
+    pub ids: Vec<i64>,
+    pub action: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BulkActionResponse {
+    pub updated: Vec<Item>,
+}
+
+#[tauri::command]
+pub async fn bulk_action(app: AppHandle, state: State<'_, AppState>, request: BulkActionRequest) -> Result<BulkActionResponse, AppError> {
+    let verb = match request.action.as_str() {
+        "pause" => BulkVerb::Pause,
+        "resume" => BulkVerb::Resume,
+        "cancel" => BulkVerb::Cancel,
+        "remove" => BulkVerb::Remove,
+        other => {
+            return Err(AppError::Validation {
+                message: format!("unknown bulk action '{other}'"),
+            })
+        }
+    };
+    let (binaries, n_slots) = {
+        let conn = state.db.lock().expect("db mutex poisoned");
+        resolve_runtime(&conn)?
+    };
+    let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter::new(app));
+    let updated = queue_manager::bulk_action(
+        Arc::clone(&state.db),
+        emitter,
+        binaries,
+        n_slots,
+        Arc::clone(&state.registry),
+        request.ids,
+        verb,
+    )
+    .await;
+    Ok(BulkActionResponse { updated })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetConcurrencyRequest {
+    pub n: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SetConcurrencyResponse {
+    pub n: i64,
+}
+
+#[tauri::command]
+pub fn set_concurrency(app: AppHandle, state: State<AppState>, request: SetConcurrencyRequest) -> Result<SetConcurrencyResponse, AppError> {
+    if request.n < 1 {
+        return Err(AppError::Validation {
+            message: "n must be >= 1".into(),
+        });
+    }
+    let binaries = {
+        let conn = state.db.lock().expect("db mutex poisoned");
+        resolve_runtime(&conn)?.0
+    };
+    let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter::new(app));
+    let n = queue_manager::set_concurrency(
+        Arc::clone(&state.db),
+        emitter,
+        binaries,
+        Arc::clone(&state.registry),
+        request.n,
+    )?;
+    Ok(SetConcurrencyResponse { n })
 }
 
 #[derive(Debug, Deserialize, Default)]

@@ -249,6 +249,27 @@ pub fn pause_dirty_items(conn: &Connection) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Deletes an item row (T6 `remove_item` — K2-AC8). `item_logs` rows cascade
+/// via the FK's `ON DELETE CASCADE`.
+pub fn delete_item(conn: &Connection, id: i64) -> Result<(), AppError> {
+    conn.execute("DELETE FROM items WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+/// Renumbers `queue_position` to `0..len` following `ordered_ids`'s order
+/// (T6 `reorder_item` — K2-AC9). Caller computes the new order; this just
+/// writes it.
+pub fn reorder_items(conn: &Connection, ordered_ids: &[i64]) -> Result<(), AppError> {
+    let now = now_unix();
+    for (position, id) in ordered_ids.iter().enumerate() {
+        conn.execute(
+            "UPDATE items SET queue_position = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![position as i64, now, id],
+        )?;
+    }
+    Ok(())
+}
+
 /// Appends one captured stdout/stderr line to `item_logs` (ring-buffer
 /// trimming + read commands are T7's job — this just writes the row).
 pub fn insert_log(conn: &Connection, item_id: i64, stream: &str, line: &str) -> Result<(), AppError> {
@@ -540,6 +561,38 @@ mod tests {
         assert_eq!(get_item(&conn, a.id).unwrap().stage, "paused");
         assert_eq!(get_item(&conn, b.id).unwrap().stage, "paused");
         assert_eq!(get_item(&conn, c.id).unwrap().stage, "queued");
+    }
+
+    #[test]
+    fn delete_item_removes_row_and_cascades_logs() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_for_test(&conn);
+        let item = insert_item(&conn, new_test_item("https://a", "queued")).unwrap();
+        insert_log(&conn, item.id, "stderr", "boom").unwrap();
+
+        delete_item(&conn, item.id).unwrap();
+
+        assert!(get_item(&conn, item.id).is_err());
+        let log_count: i64 = conn
+            .query_row("SELECT count(*) FROM item_logs WHERE item_id = ?1", [item.id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(log_count, 0);
+    }
+
+    #[test]
+    fn reorder_items_renumbers_by_given_order() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_for_test(&conn);
+        let a = insert_item(&conn, new_test_item("https://a", "queued")).unwrap();
+        let b = insert_item(&conn, new_test_item("https://b", "queued")).unwrap();
+        let c = insert_item(&conn, new_test_item("https://c", "queued")).unwrap();
+
+        // Move c to the front.
+        reorder_items(&conn, &[c.id, a.id, b.id]).unwrap();
+
+        assert_eq!(get_item(&conn, c.id).unwrap().queue_position, 0);
+        assert_eq!(get_item(&conn, a.id).unwrap().queue_position, 1);
+        assert_eq!(get_item(&conn, b.id).unwrap().queue_position, 2);
     }
 
     #[test]

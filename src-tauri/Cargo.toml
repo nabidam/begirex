@@ -22,7 +22,7 @@ thiserror = "1"
 # already resolves tokio transitively (as its runtime), so this just unifies
 # features on the same already-resolved version rather than adding real
 # dependency weight.
-tokio = { version = "1", features = ["process", "io-util", "rt", "macros"] }
+tokio = { version = "1", features = ["process", "io-util", "rt", "macros", "sync"] }
 
 [[bin]]
 name = "begirex"

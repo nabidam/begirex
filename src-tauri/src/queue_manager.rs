@@ -1,19 +1,27 @@
 //! The authoritative in-memory-view-over-`items` scheduler (ARCHITECTURE §2,
 //! §4). Owns the write path to `items`: decides the stage a new download
 //! starts in ("spawn if fewer than N active"), picks the next `queued` item
-//! when a slot frees, and reconciles crash-dirty items on launch. Must NOT
-//! spawn processes directly (asks `engine_supervisor`) or parse yt-dlp
-//! output (that's `progress_parser`/`engine_supervisor`'s job).
-//!
-//! NOT in scope here (T6): pause/cancel/remove/reorder, live N-resize.
+//! when a slot frees, reconciles crash-dirty items on launch, and (T6) the
+//! full lifecycle — pause/resume/cancel/remove/retry/reorder/set_concurrency/
+//! bulk. Must NOT spawn processes directly (asks `engine_supervisor`) or
+//! parse yt-dlp output (that's `progress_parser`/`engine_supervisor`'s job).
 
-use crate::engine_supervisor::{self, Emitter, SpawnParams};
+use crate::engine_supervisor::{self, ActiveRegistry, Emitter, SpawnParams};
 use crate::error::AppError;
 use crate::persistence::{self, Item, NewItem};
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 
 type Db = Arc<Mutex<Connection>>;
+
+/// One of the four `bulk_action` verbs (ARCHITECTURE §7.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BulkVerb {
+    Pause,
+    Resume,
+    Cancel,
+    Remove,
+}
 
 /// Resolved binary paths needed to (re)spawn any item this module decides to
 /// run — same values `ipc::add_download` already resolves from settings/
@@ -72,56 +80,74 @@ fn spawn_and_refill(
     binaries: BinaryPaths,
     emitter: Arc<dyn Emitter>,
     n_slots: i64,
+    registry: ActiveRegistry,
 ) {
     let params = spawn_params_for(&item, &binaries);
     let item_id = item.id;
     tauri::async_runtime::spawn(async move {
-        engine_supervisor::run_download(Arc::clone(&db), item_id, params, Arc::clone(&emitter))
-            .await;
+        engine_supervisor::run_download(
+            Arc::clone(&db),
+            item_id,
+            params,
+            Arc::clone(&emitter),
+            Arc::clone(&registry),
+        )
+        .await;
         // The item that just ran left its active slot one way or another
-        // (completed/error — cancelled/paused aren't reachable yet, T6).
-        // Try to fill the slot it freed (ARCHITECTURE §4).
-        try_fill_slot(db, binaries, emitter, n_slots);
+        // (completed/error — a pause/cancel already removed it from the
+        // active set itself). Try to fill the slot it freed (ARCHITECTURE §4).
+        try_fill_slot(db, binaries, emitter, n_slots, registry);
     });
 }
 
-/// Slot-refill (ARCHITECTURE §4): if fewer than `n_slots` items are active,
-/// spawn the lowest-`queue_position` `queued` item. Called after `add` and
-/// after any item leaves the active set. No-op if no slot is free or no
-/// item is queued.
-pub fn try_fill_slot(db: Db, binaries: BinaryPaths, emitter: Arc<dyn Emitter>, n_slots: i64) {
-    let next = {
-        let conn = match db.lock() {
-            Ok(c) => c,
-            Err(_) => return, // ponytail: poisoned mutex means a prior panic already broke the app; nothing to schedule.
+/// Slot-refill (ARCHITECTURE §4): while fewer than `n_slots` items are
+/// active, spawn the lowest-`queue_position` `queued` item. Called after
+/// `add`, after any item leaves the active set, on manual resume, and on a
+/// `set_concurrency` increase (where more than one slot can open up at
+/// once — hence the loop, not a single pick). No-op once no slot is free or
+/// no item is queued.
+pub fn try_fill_slot(db: Db, binaries: BinaryPaths, emitter: Arc<dyn Emitter>, n_slots: i64, registry: ActiveRegistry) {
+    loop {
+        let next = {
+            let conn = match db.lock() {
+                Ok(c) => c,
+                Err(_) => return, // ponytail: poisoned mutex means a prior panic already broke the app; nothing to schedule.
+            };
+            let active = match persistence::count_active_items(&conn) {
+                Ok(n) => n,
+                Err(_) => return,
+            };
+            if active >= n_slots {
+                return;
+            }
+            match pick_next_queued(&conn) {
+                Ok(Some(item)) => item,
+                _ => return,
+            }
         };
-        let active = match persistence::count_active_items(&conn) {
-            Ok(n) => n,
-            Err(_) => return,
-        };
-        if active >= n_slots {
-            return;
-        }
-        match pick_next_queued(&conn) {
-            Ok(Some(item)) => item,
-            _ => return,
-        }
-    };
 
-    let mut started = next;
-    {
-        let conn = match db.lock() {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        if persistence::set_stage(&conn, started.id, "downloading").is_err() {
-            return;
+        let mut started = next;
+        {
+            let conn = match db.lock() {
+                Ok(c) => c,
+                Err(_) => return,
+            };
+            if persistence::set_stage(&conn, started.id, "downloading").is_err() {
+                return;
+            }
         }
+        started.stage = "downloading".to_string();
+        emitter.emit_stage_changed(started.id, "downloading", None);
+
+        spawn_and_refill(
+            Arc::clone(&db),
+            started,
+            binaries.clone(),
+            Arc::clone(&emitter),
+            n_slots,
+            Arc::clone(&registry),
+        );
     }
-    started.stage = "downloading".to_string();
-    emitter.emit_stage_changed(started.id, "downloading", None);
-
-    spawn_and_refill(db, started, binaries, emitter, n_slots);
 }
 
 /// Adds a new download and schedules it: inserts as `downloading` if fewer
@@ -134,6 +160,7 @@ pub fn add_and_schedule(
     binaries: BinaryPaths,
     n_slots: i64,
     params: AddDownloadParams,
+    registry: ActiveRegistry,
 ) -> Result<Item, AppError> {
     let item = {
         let conn = db.lock().expect("db mutex poisoned");
@@ -154,10 +181,11 @@ pub fn add_and_schedule(
         )?
     };
 
+    emitter.emit_item_added(&item);
     emitter.emit_stage_changed(item.id, &item.stage, None);
 
     if item.stage == "downloading" {
-        spawn_and_refill(db, item.clone(), binaries, emitter, n_slots);
+        spawn_and_refill(db, item.clone(), binaries, emitter, n_slots, registry);
     }
 
     Ok(item)
@@ -183,6 +211,7 @@ pub fn reconcile_and_resume(
     emitter: Arc<dyn Emitter>,
     binaries: BinaryPaths,
     n_slots: i64,
+    registry: ActiveRegistry,
 ) -> Result<(), AppError> {
     let dirty = {
         let conn = db.lock().expect("db mutex poisoned");
@@ -205,9 +234,242 @@ pub fn reconcile_and_resume(
             binaries.clone(),
             Arc::clone(&emitter),
             n_slots,
+            Arc::clone(&registry),
         );
     }
     Ok(())
+}
+
+// --- T6: full lifecycle -----------------------------------------------------
+
+/// Pauses `item_id` (K2-AC6): if it's currently `downloading`/`merging`,
+/// kills its child (partial bytes + `resume_capable` stay on disk per
+/// ARCHITECTURE §4) before flipping the DB row; otherwise just flips the
+/// stage (e.g. pausing a `queued` item keeps it out of the scheduler's pick).
+pub async fn pause_item(db: Db, emitter: Arc<dyn Emitter>, registry: ActiveRegistry, item_id: i64) -> Result<Item, AppError> {
+    let item = {
+        let conn = db.lock().expect("db mutex poisoned");
+        persistence::get_item(&conn, item_id)?
+    };
+    if matches!(item.stage.as_str(), "downloading" | "merging") {
+        engine_supervisor::pause(&registry, item_id).await?;
+    }
+    {
+        let conn = db.lock().expect("db mutex poisoned");
+        persistence::set_stage(&conn, item_id, "paused")?;
+    }
+    emitter.emit_stage_changed(item_id, "paused", None);
+    let conn = db.lock().expect("db mutex poisoned");
+    persistence::get_item(&conn, item_id)
+}
+
+/// Resumes a `paused` item (K2-AC6): re-spawns with `-c` (always present in
+/// `SpawnParams`) immediately if a slot is free, else leaves it `queued` for
+/// the scheduler to pick up like any other queued item.
+pub fn resume_item(
+    db: Db,
+    emitter: Arc<dyn Emitter>,
+    binaries: BinaryPaths,
+    n_slots: i64,
+    registry: ActiveRegistry,
+    item_id: i64,
+) -> Result<Item, AppError> {
+    let item = {
+        let conn = db.lock().expect("db mutex poisoned");
+        persistence::get_item(&conn, item_id)?
+    };
+    let active = {
+        let conn = db.lock().expect("db mutex poisoned");
+        persistence::count_active_items(&conn)?
+    };
+    let next_stage = if active < n_slots { "downloading" } else { "queued" };
+    {
+        let conn = db.lock().expect("db mutex poisoned");
+        persistence::set_stage(&conn, item_id, next_stage)?;
+    }
+    emitter.emit_stage_changed(item_id, next_stage, None);
+    if next_stage == "downloading" {
+        let mut resumed = item;
+        resumed.stage = "downloading".to_string();
+        spawn_and_refill(Arc::clone(&db), resumed, binaries, emitter, n_slots, registry);
+    }
+    let conn = db.lock().expect("db mutex poisoned");
+    persistence::get_item(&conn, item_id)
+}
+
+/// Cancels `item_id` (K2-AC7): kills its child if active (deleting whatever
+/// partial file it was writing), marks the row `cancelled`, then tries to
+/// fill the slot it just freed.
+///
+/// ponytail: partial-file cleanup only knows about paths captured from a
+/// *running* child's "Destination:" lines (engine_supervisor's
+/// `partial_paths`) — cancelling an already-`paused` item (no running
+/// child) can't locate its file this way. Upgrade path: persist the last
+/// known destination path on the `items` row itself if that case matters.
+pub async fn cancel_item(
+    db: Db,
+    emitter: Arc<dyn Emitter>,
+    binaries: BinaryPaths,
+    n_slots: i64,
+    registry: ActiveRegistry,
+    item_id: i64,
+) -> Result<Item, AppError> {
+    let item = {
+        let conn = db.lock().expect("db mutex poisoned");
+        persistence::get_item(&conn, item_id)?
+    };
+    if matches!(item.stage.as_str(), "downloading" | "merging") {
+        engine_supervisor::cancel(&registry, item_id).await?;
+    }
+    {
+        let conn = db.lock().expect("db mutex poisoned");
+        persistence::finish_item(&conn, item_id, "cancelled", None, None)?;
+    }
+    emitter.emit_stage_changed(item_id, "cancelled", None);
+    try_fill_slot(Arc::clone(&db), binaries, emitter, n_slots, registry);
+    let conn = db.lock().expect("db mutex poisoned");
+    persistence::get_item(&conn, item_id)
+}
+
+/// Removes `item_id` entirely (K2-AC8): stops it first if active (same
+/// cleanup as cancel), deletes the row, emits `item_removed`, then tries to
+/// fill the slot it freed. Returns the item's last known state (the row is
+/// gone by the time this returns, so there's nothing left to re-fetch).
+pub async fn remove_item(
+    db: Db,
+    emitter: Arc<dyn Emitter>,
+    binaries: BinaryPaths,
+    n_slots: i64,
+    registry: ActiveRegistry,
+    item_id: i64,
+) -> Result<Item, AppError> {
+    let item = {
+        let conn = db.lock().expect("db mutex poisoned");
+        persistence::get_item(&conn, item_id)?
+    };
+    if matches!(item.stage.as_str(), "downloading" | "merging") {
+        engine_supervisor::cancel(&registry, item_id).await?;
+    }
+    {
+        let conn = db.lock().expect("db mutex poisoned");
+        persistence::delete_item(&conn, item_id)?;
+    }
+    emitter.emit_item_removed(item_id);
+    try_fill_slot(db, binaries, emitter, n_slots, registry);
+    Ok(item)
+}
+
+/// Retries an `error`ed item (T7 builds resume-correct semantics on top of
+/// this — T6 just wires the transition + reschedule): flips it back to
+/// `queued` and lets the scheduler pick it up like any other queued item.
+pub fn retry_item(
+    db: Db,
+    emitter: Arc<dyn Emitter>,
+    binaries: BinaryPaths,
+    n_slots: i64,
+    registry: ActiveRegistry,
+    item_id: i64,
+) -> Result<Item, AppError> {
+    {
+        let conn = db.lock().expect("db mutex poisoned");
+        persistence::set_stage(&conn, item_id, "queued")?;
+    }
+    emitter.emit_stage_changed(item_id, "queued", None);
+    try_fill_slot(Arc::clone(&db), binaries, emitter, n_slots, registry);
+    let conn = db.lock().expect("db mutex poisoned");
+    persistence::get_item(&conn, item_id)
+}
+
+/// Moves `item_id` to `new_position` among all items (K2-AC9), renumbering
+/// everyone else to stay contiguous. `new_position` is clamped into range.
+pub fn reorder_item(db: Db, item_id: i64, new_position: i64) -> Result<(), AppError> {
+    let conn = db.lock().expect("db mutex poisoned");
+    let mut ordered = persistence::list_items(&conn, None)?;
+    let current_index = ordered
+        .iter()
+        .position(|i| i.id == item_id)
+        .ok_or_else(|| AppError::DbError {
+            message: format!("item {item_id} not found"),
+        })?;
+    let item = ordered.remove(current_index);
+    let target = (new_position.max(0) as usize).min(ordered.len());
+    ordered.insert(target, item);
+    let ids: Vec<i64> = ordered.iter().map(|i| i.id).collect();
+    persistence::reorder_items(&conn, &ids)
+}
+
+/// Sets the concurrency semaphore size (K2-AC-adjacent — ARCHITECTURE §4 "N
+/// change"): an increase immediately tries to fill any newly-available
+/// slots; a decrease never kills an in-flight item, it just lowers the
+/// ceiling new starts respect. `n >= 1` is validated at the ipc trust
+/// boundary, not here.
+pub fn set_concurrency(
+    db: Db,
+    emitter: Arc<dyn Emitter>,
+    binaries: BinaryPaths,
+    registry: ActiveRegistry,
+    n: i64,
+) -> Result<i64, AppError> {
+    {
+        let conn = db.lock().expect("db mutex poisoned");
+        persistence::set_setting(&conn, "default_concurrency", &n.to_string())?;
+    }
+    try_fill_slot(db, binaries, emitter, n, registry);
+    Ok(n)
+}
+
+/// Applies one bulk verb to each id in `ids`, best-effort (ARCHITECTURE
+/// §7.2: "partial: per-id result list") — an id that errors (e.g. already
+/// removed) is skipped rather than aborting the whole batch.
+pub async fn bulk_action(
+    db: Db,
+    emitter: Arc<dyn Emitter>,
+    binaries: BinaryPaths,
+    n_slots: i64,
+    registry: ActiveRegistry,
+    ids: Vec<i64>,
+    verb: BulkVerb,
+) -> Vec<Item> {
+    let mut updated = Vec::new();
+    for id in ids {
+        let result = match verb {
+            BulkVerb::Pause => pause_item(Arc::clone(&db), Arc::clone(&emitter), Arc::clone(&registry), id).await,
+            BulkVerb::Resume => resume_item(
+                Arc::clone(&db),
+                Arc::clone(&emitter),
+                binaries.clone(),
+                n_slots,
+                Arc::clone(&registry),
+                id,
+            ),
+            BulkVerb::Cancel => {
+                cancel_item(
+                    Arc::clone(&db),
+                    Arc::clone(&emitter),
+                    binaries.clone(),
+                    n_slots,
+                    Arc::clone(&registry),
+                    id,
+                )
+                .await
+            }
+            BulkVerb::Remove => {
+                remove_item(
+                    Arc::clone(&db),
+                    Arc::clone(&emitter),
+                    binaries.clone(),
+                    n_slots,
+                    Arc::clone(&registry),
+                    id,
+                )
+                .await
+            }
+        };
+        if let Ok(item) = result {
+            updated.push(item);
+        }
+    }
+    updated
 }
 
 #[cfg(test)]

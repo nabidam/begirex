@@ -9,14 +9,22 @@
 //! file's header comment for why: tiny, single-format (no merge-driven
 //! percent reset), stable, no JS-runtime dependency.
 
-use begirex_lib::engine_supervisor::Emitter;
-use begirex_lib::persistence::{self, NewItem};
+use begirex_lib::engine_supervisor::{self, Emitter};
+use begirex_lib::persistence::{self, Item, NewItem};
 use begirex_lib::progress_parser::{self, ProgressTick};
 use begirex_lib::queue_manager::{self, AddDownloadParams, BinaryPaths};
 use rusqlite::Connection;
+use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// Fresh, empty per-test registry (T6) — these T3 tests don't exercise
+/// pause/cancel, they just need something to satisfy the now-required
+/// registry param on `add_and_schedule`/`reconcile_and_resume`.
+fn empty_registry() -> engine_supervisor::ActiveRegistry {
+    Arc::new(Mutex::new(HashMap::new()))
+}
 
 const TEST_URL: &str = "https://download.samplelib.com/mp4/sample-5s.mp4";
 
@@ -62,6 +70,8 @@ impl Emitter for RecordingEmitter {
             error_message.map(|s| s.to_string()),
         ));
     }
+    fn emit_item_added(&self, _item: &Item) {}
+    fn emit_item_removed(&self, _item_id: i64) {}
 }
 
 fn poll_item(
@@ -109,6 +119,7 @@ async fn third_add_queues_then_starts_on_slot_free_with_real_spawn() {
     // --limit-rate slows the (tiny, otherwise ~1-2s) download enough to give
     // this test a real window to observe "2 downloading, 1 queued" before
     // anything completes.
+    let registry = empty_registry();
     let mut item_ids = Vec::new();
     for i in 0..3 {
         let item = queue_manager::add_and_schedule(
@@ -125,6 +136,7 @@ async fn third_add_queues_then_starts_on_slot_free_with_real_spawn() {
                 extra_args: Some("--limit-rate 300K".to_string()),
                 preset_id: None,
             },
+            Arc::clone(&registry),
         )
         .unwrap();
         item_ids.push(item.id);
@@ -325,7 +337,7 @@ async fn kill_9_mid_download_then_reconcile_resumes_from_partial_bytes() {
         ytdlp_path: ytdlp_path.clone(),
         ffmpeg_path: ffmpeg_path.clone(),
     };
-    queue_manager::reconcile_and_resume(Arc::clone(&db), Arc::clone(&emitter), binaries, 2)
+    queue_manager::reconcile_and_resume(Arc::clone(&db), Arc::clone(&emitter), binaries, 2, empty_registry())
         .unwrap();
 
     // Reconcile resumes it (spawns a fresh yt-dlp process with -c) and it

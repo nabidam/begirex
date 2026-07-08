@@ -44,6 +44,10 @@
       adding = false;
     }
   }
+
+  // Plain row action buttons (T6 — full selection-bar/drag UI is T14).
+  const ACTIVE_STAGES = new Set(["downloading", "merging"]);
+  const TERMINAL_STAGES = new Set(["completed", "cancelled"]);
 </script>
 
 <main class="queue">
@@ -60,7 +64,7 @@
   {/if}
 
   <ul class="items">
-    {#each queueStore.items as item (item.id)}
+    {#each queueStore.items as item, index (item.id)}
       <li class="item">
         <span class="title">{item.title ?? item.url}</span>
         <span class="stage">{item.stage}</span>
@@ -71,6 +75,28 @@
         {#if item.error_message}
           <span class="error">{item.error_message}</span>
         {/if}
+        <span class="actions">
+          {#if ACTIVE_STAGES.has(item.stage)}
+            <button onclick={() => queueStore.pause(item.id)}>Pause</button>
+          {:else if item.stage === "paused"}
+            <button onclick={() => queueStore.resume(item.id)}>Resume</button>
+          {:else if item.stage === "error"}
+            <button onclick={() => queueStore.retry(item.id)}>Retry</button>
+          {/if}
+          {#if item.stage === "queued"}
+            <button disabled={index === 0} onclick={() => queueStore.moveUp(item.id)}>▲</button>
+            <button
+              disabled={index === queueStore.items.length - 1}
+              onclick={() => queueStore.moveDown(item.id)}
+            >
+              ▼
+            </button>
+          {/if}
+          {#if !TERMINAL_STAGES.has(item.stage)}
+            <button onclick={() => queueStore.cancel(item.id)}>Cancel</button>
+          {/if}
+          <button onclick={() => queueStore.remove(item.id)}>Remove</button>
+        </span>
       </li>
     {:else}
       <li class="empty">No downloads yet.</li>
@@ -138,5 +164,14 @@
   }
   .error {
     color: var(--error-token);
+  }
+  .actions {
+    display: flex;
+    gap: 0.4rem;
+    flex-basis: 100%;
+  }
+  .actions button {
+    padding: 0.2rem 0.5rem;
+    font-size: 0.85em;
   }
 </style>
