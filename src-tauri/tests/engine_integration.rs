@@ -247,3 +247,51 @@ async fn invalid_format_expr_yields_error_stage_with_real_stderr() {
     drop(conn);
     std::fs::remove_dir_all(&work_dir).ok();
 }
+
+// --- T9: probe (S3/S4) ------------------------------------------------------
+
+#[tokio::test]
+#[ignore] // network + real yt-dlp process
+async fn probe_returns_formats_for_a_real_media_url() {
+    let ytdlp_path = resolve_on_path("yt-dlp").expect("yt-dlp must be on PATH for this test");
+
+    // Unlike TEST_URL (a bare direct-file .mp4 with no metadata at all —
+    // confirmed in this sandbox yt-dlp reports null height/filesize for it),
+    // this archive.org item has multiple real derivative formats with actual
+    // resolution/filesize, exercising the multi-quality-pick path the S3
+    // format region relies on.
+    const PROBE_TEST_URL: &str = "https://archive.org/details/BigBuckBunny_328";
+
+    let result = engine_supervisor::probe(&ytdlp_path, PROBE_TEST_URL, None)
+        .await
+        .expect("probe should succeed for a real media URL");
+
+    assert!(
+        result.formats.len() >= 2,
+        "expected multiple probed formats, got {}",
+        result.formats.len()
+    );
+    assert!(result.formats.iter().any(|f| f.filesize.is_some()));
+    assert!(result.formats.iter().any(|f| f
+        .resolution
+        .as_deref()
+        .is_some_and(|r| r.contains('x'))));
+}
+
+#[tokio::test]
+#[ignore] // network + real yt-dlp process
+async fn probe_surfaces_real_stderr_for_an_unreachable_url() {
+    let ytdlp_path = resolve_on_path("yt-dlp").expect("yt-dlp must be on PATH for this test");
+
+    let err = engine_supervisor::probe(&ytdlp_path, "https://not-a-real-host.invalid/video", None)
+        .await
+        .expect_err("probe should fail for an unresolvable host");
+
+    match err {
+        begirex_lib::error::AppError::ProbeFailed { stderr, .. } => {
+            let stderr = stderr.expect("ProbeFailed should carry stderr");
+            assert!(!stderr.trim().is_empty(), "expected non-empty yt-dlp stderr");
+        }
+        other => panic!("expected ProbeFailed, got {other:?}"),
+    }
+}

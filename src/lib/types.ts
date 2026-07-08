@@ -114,3 +114,24 @@ export interface BulkActionRequest {
   ids: number[];
   action: "pause" | "resume" | "cancel" | "remove";
 }
+
+// engine_supervisor.rs's ProbeFormat / ProbeResult (ARCHITECTURE §7.2).
+export interface Format {
+  id: string;
+  resolution: string | null;
+  ext: string;
+  fps: number | null;
+  filesize: number | null;
+  codec: string | null;
+  note: string | null;
+}
+
+export interface ProbeFormatsRequest {
+  url: string;
+  proxy?: string | null;
+}
+
+export interface ProbeFormatsResponse {
+  title: string;
+  formats: Format[];
+}

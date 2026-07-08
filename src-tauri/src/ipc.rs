@@ -3,7 +3,7 @@
 //! of its own — state lives in `AppState` (lib.rs) and is only borrowed here.
 
 use crate::binary_manager::{self, BinaryStatus, Which};
-use crate::engine_supervisor::Emitter;
+use crate::engine_supervisor::{Emitter, ProbeFormat};
 use crate::error::AppError;
 use crate::persistence::{self, Item};
 use crate::progress_parser::{self, ProgressTick};
@@ -568,6 +568,56 @@ pub fn watch_log(state: State<AppState>, request: WatchLogRequest) -> Result<OkR
         watchers.remove(&request.id);
     }
     Ok(OkResponse { ok: true })
+}
+
+// --- T9: probe (S3/S4) ------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct ProbeFormatsRequest {
+    pub url: String,
+    pub proxy: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProbeFormatsResponse {
+    pub title: String,
+    pub formats: Vec<ProbeFormat>,
+}
+
+/// Resolves yt-dlp's path + the effective proxy (per-request override falls
+/// back to the global setting, same precedence `add_download` uses) then
+/// delegates to `engine_supervisor::probe` (ARCHITECTURE §7.2).
+#[tauri::command]
+pub async fn probe_formats(
+    state: State<'_, AppState>,
+    request: ProbeFormatsRequest,
+) -> Result<ProbeFormatsResponse, AppError> {
+    if request.url.trim().is_empty() {
+        return Err(AppError::Validation {
+            message: "url must not be empty".into(),
+        });
+    }
+
+    let (ytdlp_path, proxy) = {
+        let conn = state.db.lock().expect("db mutex poisoned");
+        let ytdlp_path = binary_manager::detect(&conn, &Which::Ytdlp)?
+            .path
+            .ok_or_else(|| AppError::BinaryNotFound {
+                message: "yt-dlp not found; set its path in Settings".into(),
+            })?;
+        let settings = settings_service::get_settings(&conn)?;
+        let proxy = request
+            .proxy
+            .filter(|p| !p.trim().is_empty())
+            .or(settings.global_proxy);
+        (ytdlp_path, proxy)
+    };
+
+    let result = crate::engine_supervisor::probe(&ytdlp_path, &request.url, proxy.as_deref()).await?;
+    Ok(ProbeFormatsResponse {
+        title: result.title,
+        formats: result.formats,
+    })
 }
 
 #[cfg(test)]

@@ -1,18 +1,11 @@
 <script lang="ts">
-  // S2 skeleton (ARCHITECTURE §10 Flow A steps 4-9 minus probe, TASKS.md T4).
-  // Plain URL + expression input -> add_download -> live rows from the
-  // queue store's progress/stage_changed subscriptions.
+  // S2 skeleton (ARCHITECTURE §10 Flow A steps 4-9, TASKS.md T4) + the real
+  // S3 Add Download overlay (T9) mounted here since this is where the
+  // "+ Add" CTA (and its Ctrl/Cmd+N shortcut) lives per UX.md.
   import { queueStore } from "../stores/queue.svelte";
+  import AddDownload from "./AddDownload.svelte";
 
-  // ponytail: preset system (T11) doesn't exist yet, so this hardcodes the
-  // literal seeded in migrations/001_init.sql's `seed()` ('bv*+ba/b') as the
-  // prefill instead of reading a Default preset dynamically. Upgrade path:
-  // once T11 lands, read this from presets store's is_default row.
-  const DEFAULT_FORMAT_EXPR = "bv*+ba/b";
-
-  let url = $state("");
-  let formatExpr = $state(DEFAULT_FORMAT_EXPR);
-  let adding = $state(false);
+  let showAddDownload = $state(false);
 
   function formatBytes(bytes: number | null): string {
     if (bytes == null) return "?";
@@ -32,32 +25,18 @@
     return `${m}:${s.toString().padStart(2, "0")}`;
   }
 
-  async function addClick() {
-    if (!url.trim() || !formatExpr.trim()) return;
-    adding = true;
-    try {
-      await queueStore.add({ url, format_expr: formatExpr });
-      url = "";
-    } catch {
-      // error already surfaced via queueStore.error
-    } finally {
-      adding = false;
-    }
-  }
-
   // Plain row action buttons (T6 — full selection-bar/drag UI is T14).
   const ACTIVE_STAGES = new Set(["downloading", "merging"]);
   const TERMINAL_STAGES = new Set(["completed", "cancelled"]);
 </script>
 
 <main class="queue">
-  <h1>BegireX</h1>
-
   <div class="add-row">
-    <input type="text" bind:value={url} placeholder="Paste a URL…" />
-    <input type="text" bind:value={formatExpr} placeholder="format expression" />
-    <button disabled={adding} onclick={addClick}>Add</button>
+    <h1>BegireX</h1>
+    <button type="button" class="add-btn" onclick={() => (showAddDownload = true)}>+ Add</button>
   </div>
+
+  <AddDownload bind:open={showAddDownload} />
 
   {#if queueStore.error}
     <p class="error">{queueStore.error}</p>
@@ -114,11 +93,18 @@
     display: flex;
     gap: 0.5rem;
     margin-bottom: 1.25rem;
+    align-items: center;
+    justify-content: space-between;
   }
-  .add-row input {
-    flex: 1;
+  .add-row h1 {
+    margin: 0;
   }
-  input,
+  .add-btn {
+    background: var(--primary);
+    color: var(--primary-foreground);
+    border-color: var(--primary);
+    font-weight: 700;
+  }
   button {
     background: var(--input);
     color: var(--foreground);

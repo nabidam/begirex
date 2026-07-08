@@ -11,6 +11,8 @@ import type {
   BulkActionRequest,
   Item,
   ItemRemovedEvent,
+  ProbeFormatsRequest,
+  ProbeFormatsResponse,
   ProgressEvent,
   Settings,
   SettingsUpdate,
@@ -117,4 +119,10 @@ export function bulkAction(request: BulkActionRequest): Promise<{ updated: Item[
 
 export function setConcurrency(n: number): Promise<{ n: number }> {
   return call<{ n: number }>("set_concurrency", { request: { n } });
+}
+
+// --- T9: probe (S3/S4) -------------------------------------------------------
+
+export function probeFormats(request: ProbeFormatsRequest): Promise<ProbeFormatsResponse> {
+  return call<ProbeFormatsResponse>("probe_formats", { request });
 }

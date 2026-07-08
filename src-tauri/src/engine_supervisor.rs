@@ -7,6 +7,7 @@ use crate::error::AppError;
 use crate::persistence;
 use crate::progress_parser::{self, ProgressTick};
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -362,6 +363,140 @@ async fn run_download_inner(
     Ok(())
 }
 
+// --- T9: probe (S3/S4) ------------------------------------------------------
+
+/// One entry of `probe`'s output (ARCHITECTURE §7.2 `Format` shape). `id` is
+/// yt-dlp's `format_id`, the only field that round-trips into a format
+/// expression (e.g. `137+140`).
+#[derive(Debug, Clone, Serialize)]
+pub struct ProbeFormat {
+    pub id: String,
+    pub resolution: Option<String>,
+    pub ext: String,
+    pub fps: Option<f64>,
+    pub filesize: Option<i64>,
+    pub codec: Option<String>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProbeResult {
+    pub title: String,
+    pub formats: Vec<ProbeFormat>,
+}
+
+/// Subset of yt-dlp's `-J` JSON this module actually reads — the real
+/// payload has dozens more fields we don't need (ponytail: no full schema).
+#[derive(Debug, Deserialize)]
+struct YtDlpFormatJson {
+    format_id: String,
+    ext: Option<String>,
+    resolution: Option<String>,
+    height: Option<i64>,
+    width: Option<i64>,
+    fps: Option<f64>,
+    filesize: Option<i64>,
+    filesize_approx: Option<i64>,
+    vcodec: Option<String>,
+    acodec: Option<String>,
+    format_note: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct YtDlpProbeJson {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    formats: Vec<YtDlpFormatJson>,
+}
+
+/// Runs `yt-dlp -J` (dump metadata as JSON, no download) for `url` and maps
+/// its `formats` array into our `ProbeFormat` shape (ARCHITECTURE §5 "probe =
+/// `-J` run", §7.2 `probe_formats`). A one-shot call, not a supervised
+/// download, so unlike `run_download` it doesn't register in `ActiveRegistry`
+/// — nothing here can be paused/cancelled by T6.
+pub async fn probe(ytdlp_path: &str, url: &str, proxy: Option<&str>) -> Result<ProbeResult, AppError> {
+    let mut cmd = Command::new(ytdlp_path);
+    cmd.arg("-J").arg("--no-playlist");
+    if let Some(proxy) = proxy.filter(|p| !p.is_empty()) {
+        cmd.arg("--proxy").arg(proxy);
+    }
+    cmd.arg(url);
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let output = cmd.output().await.map_err(|e| AppError::ProbeFailed {
+        message: format!("failed to run yt-dlp: {e}"),
+        stderr: None,
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(AppError::ProbeFailed {
+            message: "probe failed".into(),
+            stderr: Some(stderr),
+        });
+    }
+
+    let parsed: YtDlpProbeJson = serde_json::from_str(&String::from_utf8_lossy(&output.stdout))
+        .map_err(|e| AppError::ProbeFailed {
+            message: format!("could not parse yt-dlp output: {e}"),
+            stderr: None,
+        })?;
+
+    let formats = parsed.formats.into_iter().map(map_format).collect();
+
+    Ok(ProbeResult {
+        title: parsed.title.unwrap_or_default(),
+        formats,
+    })
+}
+
+/// Pure mapping from one yt-dlp `-J` format entry to our `ProbeFormat`
+/// (factored out of `probe` so it's unit-testable without spawning a real
+/// process).
+fn map_format(f: YtDlpFormatJson) -> ProbeFormat {
+    // `vcodec`/`acodec` are absent entirely (not just "none") for some
+    // generic-extractor direct-file formats (confirmed in this sandbox
+    // against a plain .mp4 URL) — a present `height`/`width` is a more
+    // reliable video signal than `vcodec` alone in that case.
+    let is_video =
+        f.height.is_some() || f.width.is_some() || f.vcodec.as_deref().is_some_and(|v| v != "none");
+    let is_audio = f.acodec.as_deref().is_some_and(|a| a != "none");
+    // yt-dlp almost always sets `resolution` itself (as `WIDTHxHEIGHT` or
+    // `"audio only"`) — this only fills the gap on the rare format missing
+    // it, matching yt-dlp's own `WIDTHxHEIGHT` convention rather than
+    // inventing a new one the frontend would have to special-case.
+    let resolution = f.resolution.or_else(|| {
+        if is_video {
+            match (f.width, f.height) {
+                (Some(w), Some(h)) => Some(format!("{w}x{h}")),
+                (None, Some(h)) => Some(format!("{h}p")),
+                _ => None,
+            }
+        } else if is_audio {
+            Some("audio only".to_string())
+        } else {
+            None
+        }
+    });
+    let codec = if is_video {
+        f.vcodec.filter(|c| c != "none")
+    } else if is_audio {
+        f.acodec.filter(|c| c != "none")
+    } else {
+        None
+    };
+    ProbeFormat {
+        id: f.format_id,
+        resolution,
+        ext: f.ext.unwrap_or_default(),
+        fps: f.fps,
+        filesize: f.filesize.or(f.filesize_approx),
+        codec,
+        note: f.format_note,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,5 +551,61 @@ mod tests {
             emitter.stage_events.lock().unwrap()[1].2.as_deref(),
             Some("boom")
         );
+    }
+
+    fn ytdlp_format(
+        vcodec: Option<&str>,
+        acodec: Option<&str>,
+        resolution: Option<&str>,
+        width: Option<i64>,
+        height: Option<i64>,
+    ) -> YtDlpFormatJson {
+        YtDlpFormatJson {
+            format_id: "137".into(),
+            ext: Some("mp4".into()),
+            resolution: resolution.map(String::from),
+            height,
+            width,
+            fps: Some(30.0),
+            filesize: Some(1_400_000_000),
+            filesize_approx: None,
+            vcodec: vcodec.map(String::from),
+            acodec: acodec.map(String::from),
+            format_note: None,
+        }
+    }
+
+    #[test]
+    fn map_format_prefers_vcodec_and_explicit_resolution_for_video() {
+        let f = ytdlp_format(Some("avc1"), Some("none"), Some("1920x1080"), Some(1920), Some(1080));
+        let mapped = map_format(f);
+        assert_eq!(mapped.resolution.as_deref(), Some("1920x1080"));
+        assert_eq!(mapped.codec.as_deref(), Some("avc1"));
+    }
+
+    #[test]
+    fn map_format_derives_widthxheight_resolution_when_missing() {
+        let f = ytdlp_format(Some("vp9"), Some("none"), None, Some(1280), Some(720));
+        let mapped = map_format(f);
+        assert_eq!(mapped.resolution.as_deref(), Some("1280x720"));
+    }
+
+    #[test]
+    fn map_format_marks_audio_only_and_uses_acodec() {
+        let f = ytdlp_format(Some("none"), Some("aac"), None, None, None);
+        let mapped = map_format(f);
+        assert_eq!(mapped.resolution.as_deref(), Some("audio only"));
+        assert_eq!(mapped.codec.as_deref(), Some("aac"));
+    }
+
+    #[test]
+    fn map_format_treats_missing_vcodec_with_height_as_video() {
+        // Real generic-extractor formats (e.g. archive.org derivatives) omit
+        // `vcodec` entirely rather than reporting "none" — confirmed in this
+        // sandbox — so `height`/`width` alone must still mark it as video.
+        let f = ytdlp_format(None, None, Some("427x240"), Some(427), Some(240));
+        let mapped = map_format(f);
+        assert_eq!(mapped.resolution.as_deref(), Some("427x240"));
+        assert_eq!(mapped.codec, None);
     }
 }

@@ -63,6 +63,7 @@ pub fn run() {
             ipc::set_concurrency,
             ipc::get_item_log,
             ipc::watch_log,
+            ipc::probe_formats,
         ])
         .setup(|app| {
             let app_data_dir = app
