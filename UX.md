@@ -21,8 +21,8 @@ What is deliberately _not_ borrowed: IDM's green accent (we use the purple Mater
 | ------ | -------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | **S1** | First-run Onboarding | Full-window wizard (blocking)                      | Detect `yt-dlp`/`ffmpeg`; let user set path or download in-app; capture global proxy                                                                       | Auto on first launch; **light** build with missing binaries; re-run from S7            |
 | **S2** | Queue (Home)         | Primary view                                       | The dense list of all downloads; live progress; the app's default and center                                                                               | App launch (after S1 passes); sidebar "Queue"; closing any overlay                     |
-| **S3** | Add Download         | Overlay panel (right drawer or centered sheet)     | Paste URL(s), probe, choose format, apply preset, set per-download overrides, add to queue                                                                 | Sidebar **+ Add** (primary CTA); `Ctrl/Cmd+N`; global paste when a URL is on clipboard |
-| **S4** | Format Picker        | Region inside S3 (expands); full modal as fallback | Show probed formats as a selectable table **and** expose the raw format-selector expression field                                                          | Auto-revealed in S3 after a successful probe; "Advanced formats" chevron               |
+| **S3** | Add Download         | Overlay panel (centered sheet / dialog)            | Paste URL(s), probe, choose format, apply preset, set per-download overrides, add to queue                                                                 | Sidebar **+ Add** (primary CTA); `Ctrl/Cmd+N`; global paste when a URL is on clipboard |
+| **S4** | Format Picker        | Modal dialog opened from S3 (quick-pick region lives in S3) | Show probed formats as a selectable table **and** expose the raw format-selector expression field                                                          | "Format Picker" button in S3's format region (revealed after a successful probe)       |
 | **S5** | Download Detail      | Right-side drawer                                  | Everything about one item: address, sizes, rate, ETA, stage, resume capability, live log tail, per-item actions                                            | Click/Enter on a queue row in S2; "Details" in row overflow menu                       |
 | **S6** | Presets              | Secondary view                                     | List, create, edit, delete named config bundles; mark the global default                                                                                   | Sidebar "Presets"; "Manage presets…" link in S3's preset dropdown                      |
 | **S7** | Settings             | Secondary view                                     | Binaries + health (re-run onboarding), global proxy, default concurrency N, default output dir + filename template, default preset, build-info, theme note | Sidebar "Settings" (bottom); `Ctrl/Cmd+,`                                              |
@@ -70,7 +70,7 @@ Notation: regions listed **top-to-bottom, start-to-end** (LTR/RTL-agnostic — t
 
 ```
 ┌───────────────────────────────────────────────────────────┐
-│  BegireX · First-time setup                    (step 1/2)  │
+│  BegireX · First-time setup                                │
 ├───────────────────────────────────────────────────────────┤
 │                                                           │
 │   ● Engine check                              → eye first │
@@ -122,7 +122,7 @@ Notation: regions listed **top-to-bottom, start-to-end** (LTR/RTL-agnostic — t
 
 - **Sidebar** (adapted rail): **+ Add** primary CTA pinned top; **Queue** group is the status filter tree (All / Downloading / Queued / Paused / Completed / Failed), each with a live count badge — this is the IDM category-tree pattern re-pointed at status. **Presets** and **Settings** pinned bottom. Active filter is highlighted (weight + indicator, not color alone).
 - **Toolbar:** search/filter-by-title, the **concurrency N** control (default 2, editable inline), and global **Start all / Pause all**. One row tall.
-- **List (the core):** virtualized (SPEC: >50 items). Each row = selection checkbox, title (truncates with tooltip), size, an **inline progress region** carrying the pill bar + % + speed + stage token, and ETA. Stage token uses `label-mono` text _plus_ an icon (never color alone): `downloading / merging / queued / paused / done / error`. → eye first: the topmost **active** (downloading) row — motion draws the eye, and that is correct.
+- **List (the core):** virtualized (SPEC: >50 items). Each row = selection checkbox, title (truncates with tooltip), size, an **inline progress region** carrying the pill bar + % + speed + stage token, and ETA. Stage token uses `label-mono` text _plus_ an icon (never color alone): `downloading / merging / queued / paused / completed / error / cancelled` (labels equal stage names; `cancelled` items appear under the **All** filter only — there is no Cancelled filter). → eye first: the topmost **active** (downloading) row — motion draws the eye, and that is correct.
 - **Selection bar:** appears only when ≥1 row is selected; hosts bulk actions (start/pause/cancel/remove/reorder). Reorder also available by drag with a movement threshold.
 - **Primary action on screen:** **+ Add** (sidebar). Row-level primary is "open detail" (click).
 - **States:**
@@ -289,7 +289,7 @@ Written as **user sees X → does Y → system responds Z**, with exact screen i
 2. **User** enters a proxy in Network → clicks **Continue**. **System** persists proxy globally, dismisses S1, lands on **S2** (empty state — "No downloads yet").
 3. **User** clicks **＋ Add** (sidebar). **System** opens **S3** with the URL field focused.
 4. **User** pastes a video URL → clicks **Probe**. **System** runs `yt-dlp -F`; format region (S4-in-panel) unfolds with quick picks + expression field.
-5. **User** either selects **1080p mp4** _or_ types `bv*[height<=1080]+ba/b` in the expression field → picks preset **Archive** → clicks **Add to queue**. **System** creates the item, closes S3, the row appears in **S2** and begins downloading (live % / speed / stage).
+5. **User** either selects **1080p mp4** _or_ types `bv*[height<=1080]+ba/b` in the expression field → picks a preset (the seeded **Default** on first run; "Archive" in SPEC's journey stands for whichever preset is selected) → clicks **Add to queue**. **System** creates the item, closes S3, the row appears in **S2** and begins downloading (live % / speed / stage).
 6. **User** clicks **＋ Add** again, pastes a second URL, Adds. **System** — with **N=2** — runs **both in parallel**; both rows show live independent progress. (A third add would sit `Queued` until a slot frees.)
 7. **User** quits the app mid-download (hard or clean). **System** has persisted queue + partial-progress to SQLite continuously.
 8. **User** relaunches. **System** rehydrates **S2**: both rows render with last-known progress and a `resuming…` token; the backend re-spawns `yt-dlp -c`, each **resumes from its byte offset**, tokens flip back to live `downloading`.

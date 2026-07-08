@@ -57,7 +57,7 @@ No new heavy deps beyond these; yt-dlp/ffmpeg are the engine, Rust owns process 
 | Module | Owns | Must not |
 |--------|------|----------|
 | **binary_manager** | Detect yt-dlp/ffmpeg (PATH + configured path); validate runnable; download-in-app (light); persist resolved paths; mid-session health re-check | Touch the queue or DB tables other than `settings` |
-| **engine_supervisor** | Spawn one `yt-dlp` child per active item; hold the child handle; stream+parse stdout/stderr into progress; enforce concurrency N; pause(SIGSTOP/kill+resume-via-`-c`)/cancel/resume | Decide *which* item runs next (that's queue_manager); write UI state |
+| **engine_supervisor** | Spawn one `yt-dlp` child per active item; hold the child handle; stream+parse stdout/stderr into progress; enforce concurrency N; pause (kill child; resume re-spawns with `-c` — no SIGSTOP, Windows has none)/cancel/resume | Decide *which* item runs next (that's queue_manager); write UI state |
 | **queue_manager** | The authoritative in-memory queue + scheduling (pick next `queued` when a slot frees); apply add/pause/cancel/remove/reorder; playlist expansion; own the write path to `items` | Spawn processes directly (asks engine_supervisor); parse yt-dlp output |
 | **persistence** | All SQLite reads/writes; migrations; crash-safe writes (progress checkpoints) | Contain business rules beyond CRUD + queries |
 | **preset_service** | CRUD presets; enforce single-default + last-preset invariants; dry-parse format expression on save | Apply presets to a download (frontend composes the effective config; queue_manager records it) |
