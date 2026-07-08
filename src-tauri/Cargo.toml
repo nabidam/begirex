@@ -16,6 +16,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 thiserror = "1"
+# ponytail: tauri::async_runtime::spawn covers task spawning, but child-process
+# spawning + async line reading needs tokio::process/io directly — tauri
+# already resolves tokio transitively (as its runtime), so this just unifies
+# features on the same already-resolved version rather than adding real
+# dependency weight.
+tokio = { version = "1", features = ["process", "io-util", "rt", "macros"] }
 
 [[bin]]
 name = "begirex"
