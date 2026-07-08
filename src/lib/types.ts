@@ -1,0 +1,106 @@
+// Wire types — snake_case verbatim, mirroring the Rust structs in
+// src-tauri/src/{persistence,binary_manager,settings_service,error}.rs.
+// CONVENTIONS.md: "no renaming layer" — do not camelCase-ify these.
+
+export interface BinaryStatus {
+  found: boolean;
+  path?: string | null;
+  version?: string | null;
+}
+
+export interface BinaryStatuses {
+  ytdlp: BinaryStatus;
+  ffmpeg: BinaryStatus;
+}
+
+export interface Settings {
+  global_proxy: string | null;
+  default_concurrency: number;
+  default_output_dir: string;
+  default_output_template: string;
+  default_preset_id: number | null;
+  build_flavor: string;
+  ytdlp_version: string | null;
+  ffmpeg_version: string | null;
+}
+
+// Partial update payload for update_settings — only present fields are applied.
+export interface SettingsUpdate {
+  global_proxy?: string | null;
+  default_concurrency?: number;
+  default_output_dir?: string;
+  default_output_template?: string;
+  default_preset_id?: number | null;
+}
+
+export interface Item {
+  id: number;
+  url: string;
+  playlist_id: string | null;
+  title: string | null;
+  stage: string;
+  format_expr: string;
+  output_dir: string;
+  output_template: string;
+  proxy: string | null;
+  extra_args: string | null;
+  preset_id: number | null;
+  total_bytes: number | null;
+  downloaded_bytes: number;
+  percent: number;
+  speed_bps: number | null;
+  eta_seconds: number | null;
+  resume_capable: boolean;
+  output_path: string | null;
+  error_message: string | null;
+  queue_position: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AddDownloadRequest {
+  url: string;
+  format_expr: string;
+  output_dir?: string | null;
+  output_template?: string | null;
+  proxy?: string | null;
+  extra_args?: string | null;
+  preset_id?: number | null;
+}
+
+// error.rs: #[serde(tag = "code", rename_all = "SCREAMING_SNAKE_CASE")]
+export type AppErrorCode =
+  | "BINARY_NOT_FOUND"
+  | "BINARY_DOWNLOAD_FAILED"
+  | "PROBE_FAILED"
+  | "INVALID_FORMAT_EXPR"
+  | "DUPLICATE_URL"
+  | "PRESET_NAME_TAKEN"
+  | "LAST_PRESET"
+  | "DB_ERROR"
+  | "PROCESS_ERROR"
+  | "VALIDATION"
+  | "IO_ERROR";
+
+export interface AppError {
+  code: AppErrorCode;
+  message: string;
+  stderr?: string | null;
+}
+
+// Event payloads (ipc.rs's ProgressPayload / StageChangedPayload).
+export interface ProgressEvent {
+  id: number;
+  percent: number;
+  downloaded_bytes: number | null;
+  total_bytes: number | null;
+  speed_bps: number | null;
+  eta_seconds: number | null;
+  stage: string;
+}
+
+export interface StageChangedEvent {
+  id: number;
+  stage: string;
+  error_message: string | null;
+}
