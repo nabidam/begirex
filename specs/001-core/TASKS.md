@@ -231,6 +231,7 @@ Requirement ids (K/V/NFR/AC) → PRD.md; screen ids (S1–S7) → UX.md; command
 
 ### T12 — 🚦 DEMO GATE 3 — Flows B and C
 
+- **Status:** ✅ Done — user-confirmed live walkthrough.
 - **Objective:** prove advanced format control and preset apply end-to-end.
 - **Dependencies:** T11.
 - **Journeys to walk:** Flow B verbatim (probe → picker → filter video-only → select 248+140 → Use format → Add → item records `248+140`); Flow C verbatim (create 4K preset with extra args → apply in S3 → download runs under it, verified via `get_item` that args/expression match). Also observe save-blocked-on-invalid-expression.
