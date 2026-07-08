@@ -4,6 +4,7 @@
 // already emitted or returned.
 import {
   addDownload,
+  bulkAction,
   cancelItem,
   listItems,
   onItemAdded,
@@ -15,12 +16,14 @@ import {
   reorderItem,
   resumeItem,
   retryItem,
+  setConcurrency,
 } from "../ipc";
 import type { AddDownloadRequest, AppError, Item } from "../types";
 
 function createQueueStore() {
   let items = $state<Item[]>([]);
   let error = $state<string | null>(null);
+  let concurrency = $state<number | null>(null);
   let subscribed = false;
 
   function patch(id: number, fields: Partial<Item>) {
@@ -139,12 +142,37 @@ function createQueueStore() {
     if (ok) await refresh();
   }
 
+  // Toolbar's Start all / Pause all (T13) — operates on whatever id set the
+  // caller decides is "visible" (post filter/search); this store just runs
+  // the bulk verb and reconciles the returned rows.
+  async function bulk(action: "pause" | "resume" | "cancel" | "remove", ids: number[]) {
+    if (ids.length === 0) return;
+    const result = await runAction(() => bulkAction({ ids, action }));
+    if (result) result.updated.forEach(upsert);
+  }
+
+  async function pauseAll(ids: number[]) {
+    await bulk("pause", ids);
+  }
+
+  async function resumeAll(ids: number[]) {
+    await bulk("resume", ids);
+  }
+
+  async function setConcurrencyLevel(n: number) {
+    const result = await runAction(() => setConcurrency(n));
+    if (result) concurrency = result.n;
+  }
+
   return {
     get items() {
       return items;
     },
     get error() {
       return error;
+    },
+    get concurrency() {
+      return concurrency;
     },
     init,
     add,
@@ -155,6 +183,9 @@ function createQueueStore() {
     retry,
     moveUp,
     moveDown,
+    pauseAll,
+    resumeAll,
+    setConcurrency: setConcurrencyLevel,
   };
 }
 

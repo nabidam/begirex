@@ -1,17 +1,24 @@
 <script lang="ts">
-  // S2 skeleton (ARCHITECTURE §10 Flow A steps 4-9, TASKS.md T4) + the real
-  // S3 Add Download overlay (T9) mounted here since this is where the
-  // "+ Add" CTA (and its Ctrl/Cmd+N shortcut) lives per UX.md.
+  // S2 list (ARCHITECTURE §10 Flow A steps 4-9, TASKS.md T4/T13) — the
+  // queue's rows region only. Shell.svelte (T13) now owns the sidebar,
+  // toolbar, and Add/Presets overlays; this component just renders whatever
+  // `items` (post filter/search) it's handed, plus the two empty-state
+  // copies UX.md distinguishes (no downloads at all vs. filtered-to-empty).
+  // Row internals/virtualization/selection are T14's job, not this one's.
   import { queueStore } from "../stores/queue.svelte";
-  import AddDownload from "./AddDownload.svelte";
-  import Presets from "./Presets.svelte";
+  import type { Item } from "../types";
 
-  let showAddDownload = $state(false);
-
-  // ponytail: no Sidebar exists yet (that's T13's Shell), so this plain
-  // toggle is the only way to reach S6 for now. Upgrade path: T13's Sidebar
-  // nav replaces this button entirely.
-  let showPresets = $state(false);
+  let {
+    items,
+    totalCount,
+    onAdd,
+    onShowAll,
+  }: {
+    items: Item[];
+    totalCount: number;
+    onAdd: () => void;
+    onShowAll: () => void;
+  } = $props();
 
   function formatBytes(bytes: number | null): string {
     if (bytes == null) return "?";
@@ -37,35 +44,12 @@
 </script>
 
 <main class="queue">
-  <div class="add-row">
-    <h1>BegireX</h1>
-    <div class="nav-actions">
-      <button type="button" onclick={() => (showPresets = true)}>Presets</button>
-      <button type="button" class="add-btn" onclick={() => (showAddDownload = true)}>+ Add</button>
-    </div>
-  </div>
-
-  <AddDownload bind:open={showAddDownload} />
-
-  {#if showPresets}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="scrim" onclick={() => (showPresets = false)}>
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="presets-overlay" onclick={(e) => e.stopPropagation()}>
-        <button type="button" class="icon-btn" onclick={() => (showPresets = false)} aria-label="Close">✕</button>
-        <Presets />
-      </div>
-    </div>
-  {/if}
-
   {#if queueStore.error}
     <p class="error">{queueStore.error}</p>
   {/if}
 
   <ul class="items">
-    {#each queueStore.items as item, index (item.id)}
+    {#each items as item, index (item.id)}
       <li class="item">
         <span class="title">{item.title ?? item.url}</span>
         <span class="stage">{item.stage}</span>
@@ -87,7 +71,7 @@
           {#if item.stage === "queued"}
             <button disabled={index === 0} onclick={() => queueStore.moveUp(item.id)}>▲</button>
             <button
-              disabled={index === queueStore.items.length - 1}
+              disabled={index === items.length - 1}
               onclick={() => queueStore.moveDown(item.id)}
             >
               ▼
@@ -100,7 +84,16 @@
         </span>
       </li>
     {:else}
-      <li class="empty">No downloads yet.</li>
+      {#if totalCount === 0}
+        <li class="empty">
+          No downloads yet. Paste a link or press
+          <button type="button" class="link-btn" onclick={onAdd}>Add</button> to start.
+        </li>
+      {:else}
+        <li class="empty">
+          Nothing here. <button type="button" class="link-btn" onclick={onShowAll}>Show all</button>
+        </li>
+      {/if}
     {/each}
   </ul>
 </main>
@@ -111,55 +104,16 @@
     margin: 2rem auto;
     padding: 1.5rem;
   }
-  .add-row {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1.25rem;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .add-row h1 {
-    margin: 0;
-  }
-  .nav-actions {
-    display: flex;
-    gap: 0.5rem;
-  }
-  .add-btn {
-    background: var(--primary);
-    color: var(--primary-foreground);
-    border-color: var(--primary);
-    font-weight: 700;
-  }
-  .scrim {
-    position: fixed;
-    inset: 0;
-    background: color-mix(in srgb, var(--surface-lowest) 70%, transparent);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 50;
-  }
-  .presets-overlay {
-    position: relative;
-    background: var(--surface-lowest);
-    border-radius: var(--radius);
-    max-height: calc(100vh - 4rem);
-    overflow-y: auto;
-  }
-  .icon-btn {
-    position: absolute;
-    top: 0.75rem;
-    inset-inline-end: 0.75rem;
-    background: transparent;
+  .link-btn {
+    background: none;
     border: none;
-    color: var(--muted-foreground);
+    color: var(--primary);
+    text-decoration: underline;
     cursor: pointer;
-    font-size: 1em;
-    padding: 0.2rem 0.4rem;
-    z-index: 1;
+    padding: 0;
+    font: inherit;
   }
-  .icon-btn:focus-visible {
+  .link-btn:focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 2px;
   }

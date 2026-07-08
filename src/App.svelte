@@ -7,7 +7,7 @@
   import { queueStore } from "./lib/stores/queue.svelte";
   import { presetsStore } from "./lib/stores/presets.svelte";
   import Onboarding from "./lib/views/Onboarding.svelte";
-  import Queue from "./lib/views/Queue.svelte";
+  import Shell from "./lib/views/Shell.svelte";
 
   let ready = $state(false);
   let showQueue = $state(false);
@@ -31,7 +31,7 @@
 {#if !ready}
   <main class="loading">Loading…</main>
 {:else if showQueue}
-  <Queue />
+  <Shell />
 {:else}
   <Onboarding onContinue={handleContinue} />
 {/if}
