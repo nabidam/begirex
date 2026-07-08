@@ -270,14 +270,84 @@ pub fn reorder_items(conn: &Connection, ordered_ids: &[i64]) -> Result<(), AppEr
     Ok(())
 }
 
-/// Appends one captured stdout/stderr line to `item_logs` (ring-buffer
-/// trimming + read commands are T7's job — this just writes the row).
+/// Ring-buffer cap per item (ARCHITECTURE §3 "trimmed to last K lines/item").
+const LOG_LINES_PER_ITEM: i64 = 500;
+
+/// Appends one captured stdout/stderr line to `item_logs`, then trims that
+/// item's log back down to `LOG_LINES_PER_ITEM` (oldest first) — keeps the
+/// table bounded regardless of how chatty a given yt-dlp run is.
 pub fn insert_log(conn: &Connection, item_id: i64, stream: &str, line: &str) -> Result<(), AppError> {
     conn.execute(
         "INSERT INTO item_logs (item_id, ts, stream, line) VALUES (?1, ?2, ?3, ?4)",
         rusqlite::params![item_id, now_unix(), stream, line],
     )?;
+    conn.execute(
+        "DELETE FROM item_logs WHERE item_id = ?1 AND id NOT IN (
+             SELECT id FROM item_logs WHERE item_id = ?1 ORDER BY id DESC LIMIT ?2
+         )",
+        rusqlite::params![item_id, LOG_LINES_PER_ITEM],
+    )?;
     Ok(())
+}
+
+/// One row of `item_logs`, ordered oldest-first for `get_item_log` (S5 log
+/// disclosure reads top-to-bottom).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct LogLine {
+    pub ts: i64,
+    pub stream: String,
+    pub line: String,
+}
+
+/// Reads back an item's stored log lines, oldest first. `tail` (if given)
+/// returns only the last N lines (still chronological in the result) —
+/// `None` returns everything currently retained (already capped at
+/// `LOG_LINES_PER_ITEM` by `insert_log`).
+pub fn get_item_log(conn: &Connection, item_id: i64, tail: Option<i64>) -> Result<Vec<LogLine>, AppError> {
+    let mut rows = match tail {
+        Some(n) => conn
+            .prepare(
+                "SELECT ts, stream, line FROM item_logs WHERE item_id = ?1
+                 ORDER BY id DESC LIMIT ?2",
+            )?
+            .query_map(rusqlite::params![item_id, n.max(0)], |row| {
+                Ok(LogLine {
+                    ts: row.get(0)?,
+                    stream: row.get(1)?,
+                    line: row.get(2)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?,
+        None => conn
+            .prepare("SELECT ts, stream, line FROM item_logs WHERE item_id = ?1 ORDER BY id ASC")?
+            .query_map([item_id], |row| {
+                Ok(LogLine {
+                    ts: row.get(0)?,
+                    stream: row.get(1)?,
+                    line: row.get(2)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?,
+    };
+    if tail.is_some() {
+        rows.reverse(); // was newest-first (DESC LIMIT); restore chronological order
+    }
+    Ok(rows)
+}
+
+/// Finds an existing item for `url` that isn't in a terminal-success/terminal-
+/// cancel stage (T7 duplicate guard — ARCHITECTURE §7.2 `add_download`
+/// `DUPLICATE_URL`). `completed`/`cancelled` don't block a re-add; every
+/// other stage (including `error`, so a failed item can't be silently
+/// re-queued as a duplicate without the user noticing) does.
+pub fn find_active_item_by_url(conn: &Connection, url: &str) -> Result<Option<Item>, AppError> {
+    Ok(conn
+        .query_row(
+            &format!("SELECT {ITEM_COLUMNS} FROM items WHERE url = ?1 AND stage NOT IN ('completed', 'cancelled') LIMIT 1"),
+            [url],
+            row_to_item,
+        )
+        .optional()?)
 }
 
 const MIGRATION_001: &str = include_str!("../migrations/001_init.sql");
@@ -593,6 +663,64 @@ mod tests {
         assert_eq!(get_item(&conn, c.id).unwrap().queue_position, 0);
         assert_eq!(get_item(&conn, a.id).unwrap().queue_position, 1);
         assert_eq!(get_item(&conn, b.id).unwrap().queue_position, 2);
+    }
+
+    #[test]
+    fn insert_log_trims_to_500_lines_per_item() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_for_test(&conn);
+        let item = insert_item(&conn, new_test_item("https://a", "downloading")).unwrap();
+
+        for i in 0..2000 {
+            insert_log(&conn, item.id, "stderr", &format!("line {i}")).unwrap();
+        }
+
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM item_logs WHERE item_id = ?1", [item.id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 500);
+
+        // The newest 500 lines survive, in chronological order.
+        let lines = get_item_log(&conn, item.id, None).unwrap();
+        assert_eq!(lines.len(), 500);
+        assert_eq!(lines.first().unwrap().line, "line 1500");
+        assert_eq!(lines.last().unwrap().line, "line 1999");
+    }
+
+    #[test]
+    fn get_item_log_tail_limits_to_last_n_in_chronological_order() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_for_test(&conn);
+        let item = insert_item(&conn, new_test_item("https://a", "downloading")).unwrap();
+        for i in 0..10 {
+            insert_log(&conn, item.id, "stderr", &format!("line {i}")).unwrap();
+        }
+
+        let tailed = get_item_log(&conn, item.id, Some(3)).unwrap();
+        assert_eq!(
+            tailed.iter().map(|l| l.line.as_str()).collect::<Vec<_>>(),
+            vec!["line 7", "line 8", "line 9"]
+        );
+    }
+
+    #[test]
+    fn find_active_item_by_url_ignores_completed_and_cancelled() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_for_test(&conn);
+        let item = insert_item(&conn, new_test_item("https://dup", "queued")).unwrap();
+
+        assert_eq!(
+            find_active_item_by_url(&conn, "https://dup").unwrap().map(|i| i.id),
+            Some(item.id)
+        );
+        assert!(find_active_item_by_url(&conn, "https://not-there").unwrap().is_none());
+
+        finish_item(&conn, item.id, "completed", Some("/tmp/x.mp4"), None).unwrap();
+        assert!(find_active_item_by_url(&conn, "https://dup").unwrap().is_none());
+
+        let item2 = insert_item(&conn, new_test_item("https://dup2", "downloading")).unwrap();
+        finish_item(&conn, item2.id, "cancelled", None, None).unwrap();
+        assert!(find_active_item_by_url(&conn, "https://dup2").unwrap().is_none());
     }
 
     #[test]

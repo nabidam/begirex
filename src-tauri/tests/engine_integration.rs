@@ -84,6 +84,7 @@ impl Emitter for RecordingEmitter {
     }
     fn emit_item_added(&self, _item: &Item) {}
     fn emit_item_removed(&self, _item_id: i64) {}
+    fn emit_log_line(&self, _item_id: i64, _stream: &str, _line: &str) {}
 }
 
 #[tokio::test]

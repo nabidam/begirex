@@ -12,7 +12,7 @@ use crate::settings_service::{self, Settings, SettingsUpdate};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter as _, State};
+use tauri::{AppHandle, Emitter as _, Manager, State};
 
 #[derive(Debug, Serialize)]
 pub struct BinaryStatuses {
@@ -170,11 +170,42 @@ impl Emitter for TauriEmitter {
     fn emit_item_removed(&self, item_id: i64) {
         let _ = self.app.emit("item_removed", ItemRemovedPayload { id: item_id });
     }
+
+    // Only tails while a detail drawer is open for this item (ARCHITECTURE
+    // §7.3) — `watch_log` toggles membership in `AppState.log_watchers`;
+    // gating lives here (not engine_supervisor) so that module stays a plain
+    // unconditional emitter, same as its other `emit_*` methods.
+    fn emit_log_line(&self, item_id: i64, stream: &str, line: &str) {
+        let watched = self
+            .app
+            .state::<AppState>()
+            .log_watchers
+            .lock()
+            .unwrap()
+            .contains(&item_id);
+        if watched {
+            let _ = self.app.emit(
+                "log_line",
+                LogLinePayload {
+                    id: item_id,
+                    stream,
+                    line,
+                },
+            );
+        }
+    }
 }
 
 #[derive(Serialize, Clone)]
 struct ItemRemovedPayload {
     id: i64,
+}
+
+#[derive(Serialize, Clone)]
+struct LogLinePayload<'a> {
+    id: i64,
+    stream: &'a str,
+    line: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -186,11 +217,28 @@ pub struct AddDownloadRequest {
     pub proxy: Option<String>,
     pub extra_args: Option<String>,
     pub preset_id: Option<i64>,
+    pub force: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct AddDownloadResponse {
     pub items: Vec<Item>,
+}
+
+/// T7 duplicate guard (ARCHITECTURE §7.2): a URL already sitting in a
+/// non-`completed`/non-`cancelled` stage is rejected unless `force` is set.
+/// A plain fn (not a `#[tauri::command]`) so it's unit-testable against an
+/// in-memory `Connection` without needing a running Tauri app.
+fn check_duplicate(conn: &rusqlite::Connection, url: &str, force: bool) -> Result<(), AppError> {
+    if force {
+        return Ok(());
+    }
+    if persistence::find_active_item_by_url(conn, url)?.is_some() {
+        return Err(AppError::DuplicateUrl {
+            message: format!("'{url}' is already in the queue"),
+        });
+    }
+    Ok(())
 }
 
 /// Adds one download and routes the scheduling decision ("spawn if fewer
@@ -216,6 +264,7 @@ pub fn add_download(
     }
 
     let conn = state.db.lock().expect("db mutex poisoned");
+    check_duplicate(&conn, &request.url, request.force.unwrap_or(false))?;
     let settings = settings_service::get_settings(&conn)?;
 
     let ytdlp_path = binary_manager::detect(&conn, &Which::Ytdlp)?
@@ -484,4 +533,95 @@ pub struct GetItemRequest {
 pub fn get_item(state: State<AppState>, request: GetItemRequest) -> Result<Item, AppError> {
     let conn = state.db.lock().expect("db mutex poisoned");
     persistence::get_item(&conn, request.id)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GetItemLogRequest {
+    pub id: i64,
+    pub tail: Option<i64>,
+}
+
+#[tauri::command]
+pub fn get_item_log(
+    state: State<AppState>,
+    request: GetItemLogRequest,
+) -> Result<Vec<persistence::LogLine>, AppError> {
+    let conn = state.db.lock().expect("db mutex poisoned");
+    persistence::get_item_log(&conn, request.id, request.tail)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WatchLogRequest {
+    pub id: i64,
+    pub on: bool,
+}
+
+/// Toggles whether `log_line` events are emitted for `id` (ARCHITECTURE
+/// §7.3: only while a detail drawer is open for that item) — S5 calls this
+/// on open/close of its log disclosure.
+#[tauri::command]
+pub fn watch_log(state: State<AppState>, request: WatchLogRequest) -> Result<OkResponse, AppError> {
+    let mut watchers = state.log_watchers.lock().expect("log watchers mutex poisoned");
+    if request.on {
+        watchers.insert(request.id);
+    } else {
+        watchers.remove(&request.id);
+    }
+    Ok(OkResponse { ok: true })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::persistence::{self, NewItem};
+    use rusqlite::Connection;
+
+    fn new_test_item(conn: &Connection, url: &str, stage: &str) -> Item {
+        persistence::insert_item(
+            conn,
+            NewItem {
+                url: url.into(),
+                format_expr: "bv*+ba/b".into(),
+                output_dir: "/tmp/out".into(),
+                output_template: "%(title)s.%(ext)s".into(),
+                proxy: None,
+                extra_args: None,
+                preset_id: None,
+                stage: stage.into(),
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn check_duplicate_rejects_active_url_unless_forced() {
+        let conn = Connection::open_in_memory().unwrap();
+        persistence::migrate_for_test(&conn);
+        new_test_item(&conn, "https://dup", "queued");
+
+        let err = check_duplicate(&conn, "https://dup", false).unwrap_err();
+        assert!(matches!(err, AppError::DuplicateUrl { .. }));
+
+        // force:true bypasses it.
+        check_duplicate(&conn, "https://dup", true).unwrap();
+    }
+
+    #[test]
+    fn check_duplicate_allows_url_once_completed_or_cancelled() {
+        let conn = Connection::open_in_memory().unwrap();
+        persistence::migrate_for_test(&conn);
+        let item = new_test_item(&conn, "https://done", "downloading");
+        persistence::finish_item(&conn, item.id, "completed", Some("/tmp/x.mp4"), None).unwrap();
+
+        check_duplicate(&conn, "https://done", false).unwrap();
+    }
+
+    #[test]
+    fn check_duplicate_allows_unrelated_url() {
+        let conn = Connection::open_in_memory().unwrap();
+        persistence::migrate_for_test(&conn);
+        new_test_item(&conn, "https://dup", "queued");
+
+        check_duplicate(&conn, "https://different", false).unwrap();
+    }
 }

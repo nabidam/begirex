@@ -25,6 +25,7 @@ pub trait Emitter: Send + Sync {
     fn emit_stage_changed(&self, item_id: i64, stage: &str, error_message: Option<&str>);
     fn emit_item_added(&self, item: &persistence::Item);
     fn emit_item_removed(&self, item_id: i64);
+    fn emit_log_line(&self, item_id: i64, stream: &str, line: &str);
 }
 
 /// Why a still-running child was killed — distinguishes an intentional
@@ -152,7 +153,7 @@ pub async fn run_download(
     emitter: Arc<dyn Emitter>,
     registry: ActiveRegistry,
 ) {
-    let result = run_download_inner(&db, item_id, &params, emitter.as_ref(), &registry).await;
+    let result = run_download_inner(&db, item_id, &params, Arc::clone(&emitter), &registry).await;
     registry.lock().unwrap().remove(&item_id);
     if let Err(err) = result {
         let message = err.to_string();
@@ -167,7 +168,7 @@ async fn run_download_inner(
     db: &Arc<Mutex<Connection>>,
     item_id: i64,
     params: &SpawnParams,
-    emitter: &dyn Emitter,
+    emitter: Arc<dyn Emitter>,
     registry: &ActiveRegistry,
 ) -> Result<(), AppError> {
     let output_template_path = format!("{}/{}", params.output_dir, params.output_template);
@@ -243,6 +244,7 @@ async fn run_download_inner(
     // task drains stdout progress — avoids the two pipes deadlocking each
     // other if one fills its OS buffer while we're blocked reading the other.
     let db_for_stderr = Arc::clone(db);
+    let emitter_for_stderr = Arc::clone(&emitter);
     let stderr_task = tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         let mut collected = Vec::new();
@@ -250,6 +252,7 @@ async fn run_download_inner(
             if let Ok(conn) = db_for_stderr.lock() {
                 let _ = persistence::insert_log(&conn, item_id, "stderr", &line);
             }
+            emitter_for_stderr.emit_log_line(item_id, "stderr", &line);
             collected.push(line);
         }
         collected
@@ -389,6 +392,7 @@ mod tests {
         }
         fn emit_item_added(&self, _item: &persistence::Item) {}
         fn emit_item_removed(&self, _item_id: i64) {}
+        fn emit_log_line(&self, _item_id: i64, _stream: &str, _line: &str) {}
     }
 
     #[test]

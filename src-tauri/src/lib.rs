@@ -14,7 +14,7 @@ use engine_supervisor::{ActiveRegistry, Emitter};
 use ipc::TauriEmitter;
 use queue_manager::BinaryPaths;
 use rusqlite::Connection;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
@@ -31,9 +31,14 @@ use tauri::Manager;
 /// shared with `engine_supervisor`/`queue_manager` so pause/cancel command
 /// handlers can find and kill the child a `run_download` task elsewhere is
 /// supervising.
+///
+/// `log_watchers` (T7) is the set of item ids with an open S5 log drawer —
+/// `watch_log` toggles membership; `TauriEmitter::emit_log_line` (ipc.rs)
+/// only emits `log_line` for ids in this set (ARCHITECTURE §7.3).
 pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
     pub registry: ActiveRegistry,
+    pub log_watchers: Arc<Mutex<HashSet<i64>>>,
 }
 
 pub fn run() {
@@ -56,6 +61,8 @@ pub fn run() {
             ipc::reorder_item,
             ipc::bulk_action,
             ipc::set_concurrency,
+            ipc::get_item_log,
+            ipc::watch_log,
         ])
         .setup(|app| {
             let app_data_dir = app
@@ -78,6 +85,7 @@ pub fn run() {
             app.manage(AppState {
                 db: Arc::clone(&db),
                 registry: Arc::clone(&registry),
+                log_watchers: Arc::new(Mutex::new(HashSet::new())),
             });
 
             // T3 launch reconcile (ARCHITECTURE §8): any item left

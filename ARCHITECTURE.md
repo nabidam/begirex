@@ -248,13 +248,14 @@ type AppError = {
 |---------|---------|----------|--------|
 | `list_items` | `{ filter?: Stage|'all' }` | `Item[]` | `DB_ERROR` |
 | `get_item` | `{ id }` | `Item` | `DB_ERROR` |
-| `add_download` | `{ url, format_expr, output_dir?, output_template?, proxy?, extra_args?, preset_id? }` | `{ items: Item[] }` (N rows for a playlist) | `DUPLICATE_URL` (warn, force flag re-submits), `VALIDATION` |
+| `add_download` | `{ url, format_expr, output_dir?, output_template?, proxy?, extra_args?, preset_id?, force? }` | `{ items: Item[] }` (N rows for a playlist) | `DUPLICATE_URL` (warn, `force:true` re-submits), `VALIDATION` |
 | `pause_item` / `resume_item` / `cancel_item` / `remove_item` | `{ id }` | `Item` (or `{ok:true}` for remove) | `PROCESS_ERROR`, `DB_ERROR` |
 | `retry_item` | `{ id }` | `Item` (stage→queued) | `DB_ERROR` |
 | `reorder_item` | `{ id, new_position }` | `{ok:true}` | `DB_ERROR` |
 | `bulk_action` | `{ ids: number[], action: 'pause'|'resume'|'cancel'|'remove' }` | `{ updated: Item[] }` | partial: per-id result list |
 | `set_concurrency` | `{ n: number }` | `{ n }` | `VALIDATION` (n<1) |
 | `get_item_log` | `{ id, tail?: number }` | `LogLine[]` | `DB_ERROR` |
+| `watch_log` | `{ id, on: boolean }` | `{ok:true}` | — toggles whether `log_line` events fire for `id` (only while its S5 drawer is open) |
 
 **Formats (S3, S4)**
 | Command | Request | Response | Errors |
