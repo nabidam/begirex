@@ -6,6 +6,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AddDownloadRequest,
   AppError,
+  BinaryDownloadEvent,
+  BinaryHealthEvent,
   BinaryStatus,
   BinaryStatuses,
   BulkActionRequest,
@@ -50,6 +52,18 @@ export function detectBinaries(): Promise<BinaryStatuses> {
 
 export function setBinaryPath(which: "ytdlp" | "ffmpeg", path: string): Promise<BinaryStatus> {
   return call<BinaryStatus>("set_binary_path", { request: { which, path } });
+}
+
+export function downloadBinary(which: "ytdlp" | "ffmpeg"): Promise<BinaryStatus> {
+  return call<BinaryStatus>("download_binary", { request: { which } });
+}
+
+export function onBinaryDownload(cb: (payload: BinaryDownloadEvent) => void): Promise<UnlistenFn> {
+  return listen<BinaryDownloadEvent>("binary_download", (event) => cb(event.payload));
+}
+
+export function onBinaryHealth(cb: (payload: BinaryHealthEvent) => void): Promise<UnlistenFn> {
+  return listen<BinaryHealthEvent>("binary_health", (event) => cb(event.payload));
 }
 
 export function getSettings(): Promise<Settings> {

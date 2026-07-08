@@ -49,6 +49,7 @@ pub fn run() {
             ipc::detect_binaries,
             ipc::set_binary_path,
             ipc::recheck_binaries,
+            ipc::download_binary,
             ipc::get_settings,
             ipc::update_settings,
             ipc::add_download,

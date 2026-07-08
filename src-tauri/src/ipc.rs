@@ -32,9 +32,11 @@ pub fn detect_binaries(state: State<AppState>) -> Result<BinaryStatuses, AppErro
 
 #[tauri::command]
 pub fn recheck_binaries(state: State<AppState>) -> Result<BinaryStatuses, AppError> {
-    // ponytail: recheck is identical to detect for T1 (no cached in-memory
-    // health state exists yet) — T16 adds mid-session health tracking that
-    // will make this a distinct code path.
+    // ponytail: recheck is identical to detect — both run binary_manager's
+    // full `--version` probe. T16's mid-session health tracking is a
+    // separate, automatic code path (engine_supervisor's pre-spawn existence
+    // check, ARCHITECTURE §8) that this command never touches; recheck stays
+    // the user-triggered deep check either way.
     detect_binaries(state)
 }
 
@@ -60,6 +62,52 @@ pub fn set_binary_path(
 
     let conn = state.db.lock().expect("db mutex poisoned");
     binary_manager::set_path(&conn, &which, &request.path)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DownloadBinaryRequest {
+    pub which: String,
+}
+
+#[derive(Serialize, Clone)]
+struct BinaryDownloadPayload<'a> {
+    which: &'a str,
+    percent: f64,
+}
+
+/// T16: fetches a missing binary in-app (ARCHITECTURE §7.2 `download_binary`).
+/// Downloads to disk with no DB lock held across the network await (T16's
+/// `binary_manager::download_to_disk` is deliberately DB-free for that
+/// reason), then reuses `set_path` to validate + persist the result exactly
+/// like a user manually browsing to it in S1.
+#[tauri::command]
+pub async fn download_binary(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: DownloadBinaryRequest,
+) -> Result<BinaryStatus, AppError> {
+    let which = Which::parse(&request.which).ok_or_else(|| AppError::Validation {
+        message: format!("unknown binary '{}', expected 'ytdlp' or 'ffmpeg'", request.which),
+    })?;
+    let app_data_dir = app.path().app_data_dir().map_err(|e| AppError::IoError {
+        message: format!("could not resolve app data dir: {e}"),
+    })?;
+
+    let progress_app = app.clone();
+    let which_label = request.which.clone();
+    let downloaded_path = binary_manager::download_to_disk(&app_data_dir, which, move |percent| {
+        let _ = progress_app.emit(
+            "binary_download",
+            BinaryDownloadPayload {
+                which: &which_label,
+                percent,
+            },
+        );
+    })
+    .await?;
+
+    let conn = state.db.lock().expect("db mutex poisoned");
+    binary_manager::set_path(&conn, &which, &downloaded_path)
 }
 
 #[tauri::command]
@@ -195,6 +243,13 @@ impl Emitter for TauriEmitter {
             );
         }
     }
+
+    fn emit_binary_health(&self, which: &str, found: bool, path: Option<&str>) {
+        let _ = self.app.emit(
+            "binary_health",
+            BinaryHealthPayload { which, found, path },
+        );
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -207,6 +262,13 @@ struct LogLinePayload<'a> {
     id: i64,
     stream: &'a str,
     line: &'a str,
+}
+
+#[derive(Serialize, Clone)]
+struct BinaryHealthPayload<'a> {
+    which: &'a str,
+    found: bool,
+    path: Option<&'a str>,
 }
 
 #[derive(Debug, Deserialize)]

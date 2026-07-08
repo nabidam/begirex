@@ -23,6 +23,13 @@ thiserror = "1"
 # features on the same already-resolved version rather than adding real
 # dependency weight.
 tokio = { version = "1", features = ["process", "io-util", "rt", "macros", "sync"] }
+# T16 in-app binary download: streamed HTTP fetch + progress, plus unpacking
+# the ffmpeg static-build archive (zip on macOS/Windows, tar.xz on Linux).
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
+futures-util = "0.3"
+zip = "0.6"
+tar = "0.4"
+xz2 = "0.1"
 
 [[bin]]
 name = "begirex"

@@ -27,6 +27,10 @@ pub trait Emitter: Send + Sync {
     fn emit_item_added(&self, item: &persistence::Item);
     fn emit_item_removed(&self, item_id: i64);
     fn emit_log_line(&self, item_id: i64, stream: &str, line: &str);
+    /// T16 mid-session binary health (ARCHITECTURE §7.3 `binary_health`) —
+    /// `which` is the wire value ("ytdlp"/"ffmpeg"); `path` is the last known
+    /// path when `found` is false, `None` otherwise.
+    fn emit_binary_health(&self, which: &str, found: bool, path: Option<&str>);
 }
 
 /// Why a still-running child was killed — distinguishes an intentional
@@ -139,6 +143,59 @@ const CHECKPOINT_MIN_INTERVAL: Duration = Duration::from_secs(2);
 // under that ceiling rather than emitting right up against it.
 const EMIT_MIN_INTERVAL: Duration = Duration::from_millis(150);
 
+/// T16 pre-spawn health check (ARCHITECTURE §8): a cheap filesystem
+/// existence check, not the deeper `--version` probe `binary_manager` runs
+/// for the user-triggered "Re-check" — that would mean spawning an extra
+/// process before every single download start. All this needs to catch is
+/// "the file that used to be here is gone" (K1-AC7), which an existence
+/// check already does.
+fn binary_present(path: &str) -> bool {
+    std::path::Path::new(path).is_file()
+}
+
+/// Returns the wire name ("ytdlp"/"ffmpeg") of the first resolved binary
+/// path that's gone missing, if any.
+fn missing_binary(params: &SpawnParams) -> Option<&'static str> {
+    if !binary_present(&params.ytdlp_path) {
+        Some("ytdlp")
+    } else if !binary_present(&params.ffmpeg_path) {
+        Some("ffmpeg")
+    } else {
+        None
+    }
+}
+
+/// A resolved binary vanished mid-session (K1-AC7): `item_id` never actually
+/// starts — its `downloading` flip (already written by the caller before
+/// spawning) reverts to `queued` — and every other item this module still
+/// holds a running child for is paused too, since it's just as stranded.
+/// Emits `binary_health{found:false}` last so the frontend's banner appears
+/// after the queue already reflects the paused state.
+async fn abort_for_missing_binary(
+    db: &Arc<Mutex<Connection>>,
+    item_id: i64,
+    which: &str,
+    emitter: &Arc<dyn Emitter>,
+    registry: &ActiveRegistry,
+) {
+    if let Ok(conn) = db.lock() {
+        let _ = persistence::set_stage(&conn, item_id, "queued");
+    }
+    emitter.emit_stage_changed(item_id, "queued", None);
+
+    let active_ids: Vec<i64> = registry.lock().unwrap().keys().copied().collect();
+    for active_id in active_ids {
+        if let Ok(true) = pause(registry, active_id).await {
+            if let Ok(conn) = db.lock() {
+                let _ = persistence::set_stage(&conn, active_id, "paused");
+            }
+            emitter.emit_stage_changed(active_id, "paused", None);
+        }
+    }
+
+    emitter.emit_binary_health(which, false, None);
+}
+
 /// Spawns yt-dlp for `item_id`, streams stdout/stderr, checkpoints progress
 /// to DB, and emits progress/stage_changed via `emitter`. On exit: code 0 →
 /// `completed` + resolved `output_path`; non-zero → `error` +
@@ -146,7 +203,8 @@ const EMIT_MIN_INTERVAL: Duration = Duration::from_millis(150);
 /// Never panics on child-process/DB paths — failures become `error` stage,
 /// not a returned `Err`, so callers (ipc.rs's fire-and-forget spawn) don't
 /// need to handle a failure path themselves; the DB row + emitted event are
-/// the only signal.
+/// the only signal. Checks both resolved binary paths still exist before
+/// doing anything else (ARCHITECTURE §8 pre-spawn health check, T16).
 pub async fn run_download(
     db: Arc<Mutex<Connection>>,
     item_id: i64,
@@ -154,6 +212,11 @@ pub async fn run_download(
     emitter: Arc<dyn Emitter>,
     registry: ActiveRegistry,
 ) {
+    if let Some(which) = missing_binary(&params) {
+        abort_for_missing_binary(&db, item_id, which, &emitter, &registry).await;
+        return;
+    }
+
     let result = run_download_inner(&db, item_id, &params, Arc::clone(&emitter), &registry).await;
     registry.lock().unwrap().remove(&item_id);
     if let Err(err) = result {
@@ -583,6 +646,7 @@ mod tests {
     struct RecordingEmitter {
         progress_events: StdMutex<Vec<(i64, f64)>>,
         stage_events: StdMutex<Vec<(i64, String, Option<String>)>>,
+        binary_health_events: StdMutex<Vec<(String, bool, Option<String>)>>,
     }
 
     impl Emitter for RecordingEmitter {
@@ -602,6 +666,12 @@ mod tests {
         fn emit_item_added(&self, _item: &persistence::Item) {}
         fn emit_item_removed(&self, _item_id: i64) {}
         fn emit_log_line(&self, _item_id: i64, _stream: &str, _line: &str) {}
+        fn emit_binary_health(&self, which: &str, found: bool, path: Option<&str>) {
+            self.binary_health_events
+                .lock()
+                .unwrap()
+                .push((which.to_string(), found, path.map(|s| s.to_string())));
+        }
     }
 
     #[test]
@@ -717,5 +787,127 @@ mod tests {
 
         let audio_only = ytdlp_format(Some("none"), Some("aac"), None, None, None);
         assert!(map_format(audio_only).has_audio);
+    }
+
+    // --- T16: pre-spawn health check -----------------------------------------
+
+    fn new_test_item(conn: &Connection, url: &str, stage: &str) -> persistence::Item {
+        persistence::insert_item(
+            conn,
+            persistence::NewItem {
+                url: url.into(),
+                format_expr: "bv*+ba/b".into(),
+                output_dir: "/tmp/out".into(),
+                output_template: "%(title)s.%(ext)s".into(),
+                proxy: None,
+                extra_args: None,
+                preset_id: None,
+                stage: stage.into(),
+            },
+        )
+        .unwrap()
+    }
+
+    fn spawn_params(ytdlp_path: &str) -> SpawnParams {
+        SpawnParams {
+            ytdlp_path: ytdlp_path.to_string(),
+            ffmpeg_path: "/usr/bin/env".to_string(),
+            url: "https://example.invalid/".to_string(),
+            format_expr: "bv*+ba/b".to_string(),
+            output_dir: "/tmp".to_string(),
+            output_template: "%(title)s.%(ext)s".to_string(),
+            proxy: None,
+            extra_args: None,
+        }
+    }
+
+    #[test]
+    fn missing_binary_detects_gone_ytdlp_before_ffmpeg() {
+        let params = spawn_params("/definitely/not/a/real/binary");
+        assert_eq!(missing_binary(&params), Some("ytdlp"));
+    }
+
+    #[test]
+    fn missing_binary_returns_none_when_both_paths_exist() {
+        let params = spawn_params("/usr/bin/env");
+        assert_eq!(missing_binary(&params), None);
+    }
+
+    #[tokio::test]
+    async fn run_download_aborts_and_reverts_to_queued_when_ytdlp_missing() {
+        // K1-AC7: a resolved binary vanishing mid-session must not spawn into
+        // failure — the item goes back to `queued`, not `error`.
+        let conn = Connection::open_in_memory().unwrap();
+        persistence::migrate_for_test(&conn);
+        let item = new_test_item(&conn, "https://a", "downloading");
+        let db = Arc::new(Mutex::new(conn));
+
+        let emitter = Arc::new(RecordingEmitter::default());
+        let registry: ActiveRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let params = spawn_params("/definitely/not/a/real/binary");
+
+        run_download(
+            Arc::clone(&db),
+            item.id,
+            params,
+            emitter.clone(),
+            Arc::clone(&registry),
+        )
+        .await;
+
+        let reverted = persistence::get_item(&db.lock().unwrap(), item.id).unwrap();
+        assert_eq!(reverted.stage, "queued");
+
+        let stage_events = emitter.stage_events.lock().unwrap();
+        assert!(stage_events.contains(&(item.id, "queued".to_string(), None)));
+
+        let health_events = emitter.binary_health_events.lock().unwrap();
+        assert_eq!(health_events.as_slice(), &[("ytdlp".to_string(), false, None)]);
+
+        assert!(registry.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_download_pauses_other_active_children_when_binary_missing() {
+        let conn = Connection::open_in_memory().unwrap();
+        persistence::migrate_for_test(&conn);
+        let stalled = new_test_item(&conn, "https://a", "downloading");
+        let already_running = new_test_item(&conn, "https://b", "downloading");
+        let db = Arc::new(Mutex::new(conn));
+
+        // Stand in for an already-spawned child (T6's `ActiveEntry`) with a
+        // real, long-lived process so `pause` has something to actually kill.
+        let child = tokio::process::Command::new("sleep")
+            .arg("5")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let registry: ActiveRegistry = Arc::new(Mutex::new(HashMap::new()));
+        registry.lock().unwrap().insert(
+            already_running.id,
+            ActiveEntry {
+                child: Arc::new(AsyncMutex::new(child)),
+                kill_reason: Arc::new(Mutex::new(None)),
+                partial_paths: Arc::new(Mutex::new(Vec::new())),
+            },
+        );
+
+        let emitter = Arc::new(RecordingEmitter::default());
+        let params = spawn_params("/definitely/not/a/real/binary");
+
+        run_download(
+            Arc::clone(&db),
+            stalled.id,
+            params,
+            emitter.clone(),
+            Arc::clone(&registry),
+        )
+        .await;
+
+        let paused = persistence::get_item(&db.lock().unwrap(), already_running.id).unwrap();
+        assert_eq!(paused.stage, "paused");
+        let stage_events = emitter.stage_events.lock().unwrap();
+        assert!(stage_events.contains(&(already_running.id, "paused".to_string(), None)));
     }
 }

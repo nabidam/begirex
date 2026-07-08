@@ -1,11 +1,16 @@
 //! Detect yt-dlp/ffmpeg (PATH + configured path), validate they're runnable,
-//! and persist resolved paths (ARCHITECTURE §2). Download-in-app and
-//! mid-session health re-check are T16 — not implemented here.
+//! persist resolved paths, and fetch a missing binary in-app (ARCHITECTURE
+//! §2, §11: depends only on persistence + reqwest — never engine_supervisor).
+//! Mid-session pre-spawn health checks are engine_supervisor's job (§8); this
+//! module only serves the user-triggered `recheck_binaries` deep check.
 
 use crate::error::AppError;
 use crate::persistence;
+use futures_util::StreamExt;
 use rusqlite::Connection;
 use serde::Serialize;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -25,6 +30,7 @@ impl BinaryStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Which {
     Ytdlp,
     Ffmpeg,
@@ -49,6 +55,26 @@ impl Which {
         match self {
             Which::Ytdlp => "ytdlp_version",
             Which::Ffmpeg => "ffmpeg_version",
+        }
+    }
+
+    /// Wire value (ARCHITECTURE §7.2/§7.3 `which`) — round-trips through
+    /// `Which::parse`.
+    pub fn wire_name(&self) -> &'static str {
+        match self {
+            Which::Ytdlp => "ytdlp",
+            Which::Ffmpeg => "ffmpeg",
+        }
+    }
+
+    /// Destination file name once downloaded into app-data `bin/` — `.exe`
+    /// suffix on Windows so it's directly runnable there without a shim.
+    fn binary_file_name(&self) -> String {
+        let base = self.command_name();
+        if cfg!(target_os = "windows") {
+            format!("{base}.exe")
+        } else {
+            base.to_string()
         }
     }
 
@@ -151,6 +177,171 @@ pub fn set_path(conn: &Connection, which: &Which, path: &str) -> Result<BinarySt
     })
 }
 
+// --- T16: in-app download ---------------------------------------------------
+
+/// `<app-data>/bin/` — where downloaded binaries land (ARCHITECTURE §9:
+/// OS-specific dirs resolved by the caller via Tauri path APIs; this module
+/// only picks the subfolder name).
+fn bin_dir(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join("bin")
+}
+
+// ponytail: yt-dlp ships a single-file executable per platform straight from
+// its GitHub releases — no archive to unpack. ffmpeg has no equivalent
+// official single-file release, so this pins one well-known static-build
+// source per platform (the same ones most yt-dlp-GUI projects use); a
+// version-suffixed inner folder is handled by scanning the archive for a
+// file literally named ffmpeg/ffmpeg.exe rather than hardcoding its path,
+// so a build-number bump upstream doesn't break this. Only the Linux path is
+// exercised against the real network in this sandbox — verify macOS/Windows
+// URLs before shipping a build for those (same gap as T1's PATH-search).
+#[cfg(target_os = "linux")]
+fn download_url(which: Which) -> &'static str {
+    match which {
+        Which::Ytdlp => "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp",
+        Which::Ffmpeg => "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz",
+    }
+}
+#[cfg(target_os = "macos")]
+fn download_url(which: Which) -> &'static str {
+    match which {
+        Which::Ytdlp => "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos",
+        Which::Ffmpeg => "https://evermeet.cx/ffmpeg/getrelease/zip",
+    }
+}
+#[cfg(target_os = "windows")]
+fn download_url(which: Which) -> &'static str {
+    match which {
+        Which::Ytdlp => "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
+        Which::Ffmpeg => "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+    }
+}
+
+fn download_failed(message: impl Into<String>) -> AppError {
+    AppError::BinaryDownloadFailed { message: message.into() }
+}
+
+/// Streams `url` into memory, reporting 0..=100 via `on_progress` as bytes
+/// arrive. Buffered fully in memory rather than to a temp file — this is a
+/// one-shot, human-triggered onboarding action, not a hot path, so the
+/// simplicity is worth the transient ~100MB (ffmpeg) held in RAM.
+async fn stream_download(
+    url: &str,
+    on_progress: &(dyn Fn(f64) + Send + Sync),
+) -> Result<Vec<u8>, AppError> {
+    let response = reqwest::get(url)
+        .await
+        .map_err(|e| download_failed(format!("failed to fetch {url}: {e}")))?;
+    if !response.status().is_success() {
+        return Err(download_failed(format!("download failed: HTTP {}", response.status())));
+    }
+    let total = response.content_length().filter(|&n| n > 0);
+
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| download_failed(format!("download interrupted: {e}")))?;
+        bytes.extend_from_slice(&chunk);
+        if let Some(total) = total {
+            on_progress((bytes.len() as f64 / total as f64) * 100.0);
+        }
+    }
+    on_progress(100.0);
+    Ok(bytes)
+}
+
+/// Scans a zip archive for the first entry whose base name is in `names`,
+/// returning its decompressed bytes (macOS/Windows ffmpeg zips).
+fn extract_named_from_zip(archive_bytes: &[u8], names: &[&str]) -> Result<Vec<u8>, AppError> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(archive_bytes))
+        .map_err(|e| download_failed(format!("failed to read archive: {e}")))?;
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| download_failed(format!("failed to read archive entry: {e}")))?;
+        let base_name = entry.name().rsplit('/').next().unwrap_or_default().to_string();
+        if names.contains(&base_name.as_str()) {
+            let mut out = Vec::new();
+            std::io::copy(&mut entry, &mut out).map_err(|e| download_failed(e.to_string()))?;
+            return Ok(out);
+        }
+    }
+    Err(download_failed("expected binary not found in downloaded archive"))
+}
+
+/// Scans a `.tar.xz` archive for the first entry whose base name is in
+/// `names` (Linux ffmpeg static build).
+fn extract_named_from_tar_xz(archive_bytes: &[u8], names: &[&str]) -> Result<Vec<u8>, AppError> {
+    let decompressed = xz2::read::XzDecoder::new(archive_bytes);
+    let mut archive = tar::Archive::new(decompressed);
+    let entries = archive
+        .entries()
+        .map_err(|e| download_failed(format!("failed to read archive: {e}")))?;
+    for entry in entries {
+        let mut entry = entry.map_err(|e| download_failed(format!("failed to read archive entry: {e}")))?;
+        let base_name = entry
+            .path()
+            .map_err(|e| download_failed(e.to_string()))?
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if names.contains(&base_name.as_str()) {
+            let mut out = Vec::new();
+            std::io::copy(&mut entry, &mut out).map_err(|e| download_failed(e.to_string()))?;
+            return Ok(out);
+        }
+    }
+    Err(download_failed("expected binary not found in downloaded archive"))
+}
+
+#[cfg(target_os = "linux")]
+fn extract_ffmpeg(archive_bytes: &[u8]) -> Result<Vec<u8>, AppError> {
+    extract_named_from_tar_xz(archive_bytes, &["ffmpeg"])
+}
+#[cfg(not(target_os = "linux"))]
+fn extract_ffmpeg(archive_bytes: &[u8]) -> Result<Vec<u8>, AppError> {
+    extract_named_from_zip(archive_bytes, &["ffmpeg", "ffmpeg.exe"])
+}
+
+/// Fetches `which`'s official release into `<app_data_dir>/bin/`, reporting
+/// download progress via `on_progress` (ARCHITECTURE §7.2 `download_binary`,
+/// §7.3 `binary_download`). Pure network+fs — takes no DB connection, so it
+/// never holds `state.db`'s mutex across the (potentially slow) network
+/// await; the caller persists the resulting path via `set_path` once this
+/// returns. yt-dlp's release is already the runnable executable; ffmpeg's is
+/// unpacked from its archive first.
+pub async fn download_to_disk(
+    app_data_dir: &Path,
+    which: Which,
+    on_progress: impl Fn(f64) + Send + Sync + 'static,
+) -> Result<String, AppError> {
+    let raw = stream_download(download_url(which), &on_progress).await?;
+    let bytes = match which {
+        Which::Ytdlp => raw,
+        Which::Ffmpeg => extract_ffmpeg(&raw)?,
+    };
+
+    let dir = bin_dir(app_data_dir);
+    std::fs::create_dir_all(&dir).map_err(|e| AppError::IoError { message: e.to_string() })?;
+    let dest = dir.join(which.binary_file_name());
+    let mut file = std::fs::File::create(&dest).map_err(|e| AppError::IoError { message: e.to_string() })?;
+    file.write_all(&bytes).map_err(|e| AppError::IoError { message: e.to_string() })?;
+    drop(file);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&dest)
+            .map_err(|e| AppError::IoError { message: e.to_string() })?
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&dest, perms).map_err(|e| AppError::IoError { message: e.to_string() })?;
+    }
+
+    Ok(dest.to_string_lossy().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,5 +385,83 @@ mod tests {
         assert!(Which::parse("bogus").is_none());
         assert!(Which::parse("ytdlp").is_some());
         assert!(Which::parse("ffmpeg").is_some());
+    }
+
+    fn fabricate_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, contents) in entries {
+            writer.start_file(*name, zip::write::FileOptions::default()).unwrap();
+            writer.write_all(contents).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn fabricate_tar_xz(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut builder = tar::Builder::new(xz2::write::XzEncoder::new(Vec::new(), 6));
+        for (name, contents) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(contents.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder.append_data(&mut header, name, *contents).unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn extract_named_from_zip_finds_binary_regardless_of_nested_folder() {
+        let archive = fabricate_zip(&[
+            ("ffmpeg-7.0.2-essentials/README.txt", b"ignore me"),
+            ("ffmpeg-7.0.2-essentials/bin/ffmpeg.exe", b"fake ffmpeg bytes"),
+        ]);
+        let extracted = extract_named_from_zip(&archive, &["ffmpeg", "ffmpeg.exe"]).unwrap();
+        assert_eq!(extracted, b"fake ffmpeg bytes");
+    }
+
+    #[test]
+    fn extract_named_from_zip_errors_when_binary_absent() {
+        let archive = fabricate_zip(&[("README.txt", b"nothing useful here")]);
+        let err = extract_named_from_zip(&archive, &["ffmpeg", "ffmpeg.exe"]).unwrap_err();
+        assert!(matches!(err, AppError::BinaryDownloadFailed { .. }));
+    }
+
+    #[test]
+    fn extract_named_from_tar_xz_finds_binary_regardless_of_nested_folder() {
+        let archive = fabricate_tar_xz(&[
+            ("ffmpeg-7.0.2-amd64-static/GPLv3.txt", b"ignore me"),
+            ("ffmpeg-7.0.2-amd64-static/ffmpeg", b"fake ffmpeg bytes"),
+        ]);
+        let extracted = extract_named_from_tar_xz(&archive, &["ffmpeg"]).unwrap();
+        assert_eq!(extracted, b"fake ffmpeg bytes");
+    }
+
+    #[test]
+    fn extract_named_from_tar_xz_errors_when_binary_absent() {
+        let archive = fabricate_tar_xz(&[("README", b"nothing useful here")]);
+        let err = extract_named_from_tar_xz(&archive, &["ffmpeg"]).unwrap_err();
+        assert!(matches!(err, AppError::BinaryDownloadFailed { .. }));
+    }
+
+    #[test]
+    fn which_binary_file_name_matches_command_name_on_unix() {
+        // ponytail: this repo's dev/test target is Linux — the Windows
+        // `.exe` suffix branch is exercised by inspection, not CI, same gap
+        // T1 already accepted for its PATH-search fallback.
+        if !cfg!(target_os = "windows") {
+            assert_eq!(Which::Ytdlp.binary_file_name(), "yt-dlp");
+            assert_eq!(Which::Ffmpeg.binary_file_name(), "ffmpeg");
+        }
+    }
+
+    #[tokio::test]
+    #[ignore] // network-dependent (CONVENTIONS: run at demo gates)
+    async fn download_to_disk_fetches_a_runnable_ffmpeg() {
+        let tmp = std::env::temp_dir().join(format!("begirex-dl-test-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let path = download_to_disk(&tmp, Which::Ffmpeg, |_percent| {}).await.unwrap();
+        assert!(probe_version(&path).is_some());
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

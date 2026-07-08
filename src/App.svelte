@@ -6,13 +6,16 @@
   import { settingsStore } from "./lib/stores/settings.svelte";
   import { queueStore } from "./lib/stores/queue.svelte";
   import { presetsStore } from "./lib/stores/presets.svelte";
+  import { binaryHealthStore } from "./lib/stores/binaryHealth.svelte";
   import Onboarding from "./lib/views/Onboarding.svelte";
   import Shell from "./lib/views/Shell.svelte";
+  import GlobalBanner from "./lib/components/GlobalBanner.svelte";
 
   let ready = $state(false);
   let showQueue = $state(false);
 
   onMount(async () => {
+    binaryHealthStore.init();
     await settingsStore.init();
     const binaries = settingsStore.binaries;
     if (binaries?.ytdlp.found && binaries?.ffmpeg.found) {
@@ -26,7 +29,19 @@
     showQueue = true;
     await Promise.all([queueStore.init(), presetsStore.init()]);
   }
+
+  // K1-AC7: GlobalBanner's Fix button reopens S1 (UX.md S7 states). Re-runs
+  // detect_binaries first (Onboarding only reads settingsStore's already-
+  // hydrated state, it doesn't detect on its own) so S1 shows the real
+  // current status rather than what was true at app launch.
+  async function handleFix() {
+    binaryHealthStore.clear();
+    showQueue = false;
+    await settingsStore.init();
+  }
 </script>
+
+<GlobalBanner onFix={handleFix} />
 
 {#if !ready}
   <main class="loading">Loading…</main>

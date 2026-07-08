@@ -188,3 +188,15 @@ export interface LogLineEvent {
   stream: string;
   line: string;
 }
+
+// T16: ipc.rs's BinaryDownloadPayload / BinaryHealthPayload.
+export interface BinaryDownloadEvent {
+  which: "ytdlp" | "ffmpeg";
+  percent: number;
+}
+
+export interface BinaryHealthEvent {
+  which: "ytdlp" | "ffmpeg";
+  found: boolean;
+  path?: string | null;
+}
