@@ -32,6 +32,7 @@ Requirement ids (K/V/NFR/AC) → PRD.md; screen ids (S1–S7) → UX.md; command
 
 ### T1 — AppError + settings + binary detection  *(PLAN Chunk 2, part 1 — backend only)*
 
+- **Status:** ✅ Done — `cargo test` green (13 total: 9 unit + 4 integration in `src-tauri/tests/`). Criterion 1 & 2 demonstrated for real against this sandbox's actual `yt-dlp` (PATH) and `ffmpeg` (PATH + `set_binary_path`), plus a fabricated fake-binary script driven through a real spawn in `tests/binary_detection.rs`; a bogus path returns `BINARY_NOT_FOUND` and leaves `settings` unchanged (asserted before/after against a real SQLite file). Criterion 3 demonstrated in `tests/settings_persistence.rs`: `update_settings{global_proxy}` then a fresh `Connection` reopen of the same on-disk file (simulating restart) returns the same value via `get_settings`. `cargo build --manifest-path src-tauri/Cargo.toml` succeeds (produces `target/debug/begirex`). Real-world note: ffmpeg's actual CLI rejects `--version` (exit 8) and only accepts `-version`; `probe_version` tries `--version` first then falls back to `-version` (see `ponytail:` comment in `binary_manager.rs`) so ffmpeg detection actually works, not just yt-dlp.
 - **Objective:** typed error surface, settings read/write, and binary discovery reachable over IPC.
 - **Inputs:** T0 DB + settings.
 - **Outputs:** `detect_binaries`, `set_binary_path`, `recheck_binaries`, `get_settings`, `update_settings` commands live.

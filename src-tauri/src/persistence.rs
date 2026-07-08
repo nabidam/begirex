@@ -62,6 +62,39 @@ fn now_unix() -> i64 {
         .as_secs() as i64
 }
 
+/// Reads a single `settings` value; `None` if the key is unset (distinct from
+/// an empty string). Business logic (validation, defaults) is the caller's.
+pub fn get_setting(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        [key],
+        |row| row.get(0),
+    )
+    .map(Some)
+    .or_else(|err| match err {
+        rusqlite::Error::QueryReturnedNoRows => Ok(None),
+        other => Err(other),
+    })
+}
+
+/// Upserts a single `settings` value.
+pub fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [key, value],
+    )?;
+    Ok(())
+}
+
+/// Runs just the schema migration (no seed) against an in-memory connection,
+/// for other modules' unit tests that need a real `settings` table without
+/// pulling in full seed data.
+#[cfg(test)]
+pub(crate) fn migrate_for_test(conn: &Connection) {
+    migrate(conn).unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
