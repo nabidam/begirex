@@ -17,11 +17,13 @@
     totalCount,
     onAdd,
     onShowAll,
+    addDisabled = false,
   }: {
     items: Item[];
     totalCount: number;
     onAdd: () => void;
     onShowAll: () => void;
+    addDisabled?: boolean;
   } = $props();
 
   const ROW_HEIGHT = 56;
@@ -230,7 +232,9 @@
 
   <div class="list-wrap" bind:clientHeight={listHeight}>
     {#if visible.length === 0}
-      {#if totalCount === 0}
+      {#if addDisabled}
+        <p class="empty">Downloads are disabled until yt-dlp/ffmpeg are set up — see Settings (sidebar) to finish setup.</p>
+      {:else if totalCount === 0}
         <p class="empty">
           No downloads yet. Paste a link or press
           <button type="button" class="link-btn" onclick={onAdd}>Add</button> to start.

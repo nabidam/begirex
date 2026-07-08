@@ -11,11 +11,13 @@
   import { filtersStore, STATUS_FILTERS, type StatusFilter } from "../stores/filters.svelte";
   import type { Item } from "../types";
 
-  let { items, onAdd, onOpenPresets, collapsed }: {
+  let { items, onAdd, onOpenPresets, onOpenSettings, collapsed, addDisabled = false }: {
     items: Item[];
     onAdd: () => void;
     onOpenPresets: () => void;
+    onOpenSettings: () => void;
     collapsed: boolean;
+    addDisabled?: boolean;
   } = $props();
 
   const ICON: Record<StatusFilter, string> = {
@@ -48,7 +50,17 @@
     <span class="glyph" aria-hidden="true">{collapsed ? "»" : "«"}</span>
   </button>
 
-  <button type="button" class="add-btn" onclick={onAdd} title={collapsed ? "Add" : undefined}>
+  <button
+    type="button"
+    class="add-btn"
+    onclick={onAdd}
+    disabled={addDisabled}
+    title={addDisabled
+      ? "Set up yt-dlp/ffmpeg in Settings to enable downloads."
+      : collapsed
+        ? "Add"
+        : undefined}
+  >
     <span class="glyph" aria-hidden="true">＋</span>
     {#if !collapsed}<span>Add</span>{/if}
   </button>
@@ -79,10 +91,12 @@
       <span class="glyph" aria-hidden="true">⛃</span>
       {#if !collapsed}<span>Presets</span>{/if}
     </button>
-    <!-- ponytail: Settings (S7) doesn't exist yet — that's T17. Placeholder
-         keeps the UX.md wireframe's pinned-bottom layout truthful without
-         wiring a screen that isn't built. Upgrade path: T17 wires onclick. -->
-    <button type="button" class="pinned-row" disabled title={collapsed ? "Settings" : undefined}>
+    <button
+      type="button"
+      class="pinned-row"
+      onclick={onOpenSettings}
+      title={collapsed ? "Settings (Ctrl/Cmd+,)" : "Settings (Ctrl/Cmd+,)"}
+    >
       <span class="glyph" aria-hidden="true">⚙</span>
       {#if !collapsed}<span>Settings</span>{/if}
     </button>

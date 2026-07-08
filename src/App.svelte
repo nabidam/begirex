@@ -30,6 +30,20 @@
     await Promise.all([queueStore.init(), presetsStore.init()]);
   }
 
+  // T17 AC2: "I'll set it later" lands on S2 in degraded read-only mode
+  // (Shell/Sidebar/Queue disable Add while a binary is unresolved) rather
+  // than blocking on bothFound like Continue does.
+  async function handleSkip() {
+    showQueue = true;
+    await Promise.all([queueStore.init(), presetsStore.init()]);
+  }
+
+  // S7 AC3: "Re-run onboarding reopens S1 with current state."
+  async function handleReRunOnboarding() {
+    showQueue = false;
+    await settingsStore.init();
+  }
+
   // K1-AC7: GlobalBanner's Fix button reopens S1 (UX.md S7 states). Re-runs
   // detect_binaries first (Onboarding only reads settingsStore's already-
   // hydrated state, it doesn't detect on its own) so S1 shows the real
@@ -46,9 +60,9 @@
 {#if !ready}
   <main class="loading">Loading…</main>
 {:else if showQueue}
-  <Shell />
+  <Shell onReRunOnboarding={handleReRunOnboarding} />
 {:else}
-  <Onboarding onContinue={handleContinue} />
+  <Onboarding onContinue={handleContinue} onSkip={handleSkip} />
 {/if}
 
 <style>

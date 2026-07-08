@@ -50,6 +50,12 @@ export function detectBinaries(): Promise<BinaryStatuses> {
   return call<BinaryStatuses>("detect_binaries");
 }
 
+// T17: S7 "Re-check" re-runs detection (same shape as detect_binaries, but
+// the wire command is named recheck_binaries per ARCHITECTURE §7.2).
+export function recheckBinaries(): Promise<BinaryStatuses> {
+  return call<BinaryStatuses>("recheck_binaries");
+}
+
 export function setBinaryPath(which: "ytdlp" | "ffmpeg", path: string): Promise<BinaryStatus> {
   return call<BinaryStatus>("set_binary_path", { request: { which, path } });
 }
@@ -92,6 +98,12 @@ export function getItem(id: number): Promise<Item> {
 // plugin). Returns null if the user cancels.
 export async function pickBinaryPath(): Promise<string | null> {
   const result = await open({ multiple: false, directory: false });
+  return typeof result === "string" ? result : null;
+}
+
+// T17: S7's "Default output dir" [...] picker.
+export async function pickDirectory(): Promise<string | null> {
+  const result = await open({ multiple: false, directory: true });
   return typeof result === "string" ? result : null;
 }
 
