@@ -36,6 +36,7 @@ pub struct BinaryPaths {
 /// carries no `stage` — that decision now belongs to queue_manager, not the
 /// caller (ARCHITECTURE §7.2: route add_download's scheduling decision
 /// through queue_manager instead of ipc.rs deciding inline).
+#[derive(Clone)]
 pub struct AddDownloadParams {
     pub url: String,
     pub format_expr: String,
@@ -44,6 +45,11 @@ pub struct AddDownloadParams {
     pub proxy: Option<String>,
     pub extra_args: Option<String>,
     pub preset_id: Option<i64>,
+    // T19: set by `add_download_expanding` for playlist-derived rows; both
+    // `None` for a lone video, same as every pre-T19 caller of
+    // `add_and_schedule` directly.
+    pub playlist_id: Option<String>,
+    pub title: Option<String>,
 }
 
 fn spawn_params_for(item: &Item, binaries: &BinaryPaths) -> SpawnParams {
@@ -177,6 +183,8 @@ pub fn add_and_schedule(
                 extra_args: params.extra_args,
                 preset_id: params.preset_id,
                 stage: stage.to_string(),
+                playlist_id: params.playlist_id,
+                title: params.title,
             },
         )?
     };
@@ -189,6 +197,46 @@ pub fn add_and_schedule(
     }
 
     Ok(item)
+}
+
+/// Expands `params.url` via `engine_supervisor::expand_playlist` and adds one
+/// row per resulting entry (T19, K2-AC3/V2-AC2): a lone video still comes
+/// back as a single `PlaylistEntry` with no `playlist_id`, so this is the one
+/// path `add_download` needs regardless of whether the submitted URL is a
+/// playlist. Each entry is scheduled independently through
+/// `add_and_schedule` — same "spawn if a slot's free, else queue" rule a
+/// plain single add gets — so cancelling/erroring one never touches the
+/// others (AC1/AC2/AC3).
+pub async fn add_download_expanding(
+    db: Db,
+    emitter: Arc<dyn Emitter>,
+    binaries: BinaryPaths,
+    n_slots: i64,
+    registry: ActiveRegistry,
+    params: AddDownloadParams,
+) -> Result<Vec<Item>, AppError> {
+    let expansion =
+        engine_supervisor::expand_playlist(&binaries.ytdlp_path, &params.url, params.proxy.as_deref()).await?;
+
+    let mut items = Vec::with_capacity(expansion.entries.len());
+    for entry in expansion.entries {
+        let entry_params = AddDownloadParams {
+            url: entry.url,
+            title: entry.title,
+            playlist_id: expansion.playlist_id.clone(),
+            ..params.clone()
+        };
+        let item = add_and_schedule(
+            Arc::clone(&db),
+            Arc::clone(&emitter),
+            binaries.clone(),
+            n_slots,
+            entry_params,
+            Arc::clone(&registry),
+        )?;
+        items.push(item);
+    }
+    Ok(items)
 }
 
 /// Launch-time reconcile (ARCHITECTURE §8, read literally — see module doc
@@ -488,6 +536,8 @@ mod tests {
                 extra_args: None,
                 preset_id: None,
                 stage: stage.into(),
+                playlist_id: None,
+                title: None,
             },
         )
         .unwrap()
@@ -518,5 +568,142 @@ mod tests {
         new_test_item(&conn, "https://a", "downloading");
 
         assert!(pick_next_queued(&conn).unwrap().is_none());
+    }
+
+    // --- T19: playlist expansion ---------------------------------------------
+
+    #[derive(Default)]
+    struct NoopEmitter;
+    impl Emitter for NoopEmitter {
+        fn emit_progress(&self, _item_id: i64, _tick: &crate::progress_parser::ProgressTick) {}
+        fn emit_stage_changed(&self, _item_id: i64, _stage: &str, _error_message: Option<&str>) {}
+        fn emit_item_added(&self, _item: &Item) {}
+        fn emit_item_removed(&self, _item_id: i64) {}
+        fn emit_log_line(&self, _item_id: i64, _stream: &str, _line: &str) {}
+        fn emit_binary_health(&self, _which: &str, _found: bool, _path: Option<&str>) {}
+    }
+
+    /// A fake `yt-dlp` that answers `-J --flat-playlist` with a canned
+    /// two-entry playlist, standing in for the real binary the same way
+    /// `engine_supervisor`'s own tests fake it out for `run_download`.
+    fn write_fake_flat_playlist_ytdlp() -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("begirex-fake-ytdlp-{}", std::process::id()));
+        std::fs::write(
+            &path,
+            "#!/bin/sh\necho '{\"id\":\"PLTEST\",\"entries\":[\
+             {\"webpage_url\":\"https://example.invalid/watch?v=a\",\"title\":\"A\"},\
+             {\"webpage_url\":\"https://example.invalid/watch?v=b\",\"title\":\"B\"}]}'\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        path
+    }
+
+    #[tokio::test]
+    async fn add_download_expanding_creates_one_independent_row_per_playlist_entry() {
+        // T19-AC1: a playlist of M entries yields M rows sharing a
+        // `playlist_id`, each its own row in the queue.
+        let conn = Connection::open_in_memory().unwrap();
+        persistence::migrate_for_test(&conn);
+        let db: Db = Arc::new(Mutex::new(conn));
+
+        let script = write_fake_flat_playlist_ytdlp();
+        let emitter: Arc<dyn Emitter> = Arc::new(NoopEmitter::default());
+        let registry: ActiveRegistry = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let binaries = BinaryPaths {
+            ytdlp_path: script.to_string_lossy().to_string(),
+            ffmpeg_path: "ffmpeg".into(),
+        };
+
+        let items = add_download_expanding(
+            Arc::clone(&db),
+            emitter,
+            binaries,
+            // n_slots: 0 keeps every entry `queued` (never `downloading`), so
+            // this test only exercises expansion + row creation, not a real
+            // download spawn against the fake binary.
+            0,
+            registry,
+            AddDownloadParams {
+                url: "https://example.invalid/playlist?list=PLTEST".into(),
+                format_expr: "bv*+ba/b".into(),
+                output_dir: "/tmp/out".into(),
+                output_template: "%(title)s.%(ext)s".into(),
+                proxy: None,
+                extra_args: None,
+                preset_id: None,
+                playlist_id: None,
+                title: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        std::fs::remove_file(&script).ok();
+
+        assert_eq!(items.len(), 2);
+        assert!(items[0].playlist_id.is_some());
+        assert_eq!(items[0].playlist_id, items[1].playlist_id);
+        assert_ne!(items[0].id, items[1].id);
+        assert_ne!(items[0].url, items[1].url);
+        assert_eq!(items[0].title, Some("A".to_string()));
+        assert_eq!(items[1].title, Some("B".to_string()));
+        assert_eq!(items[0].stage, "queued");
+        assert_eq!(items[1].stage, "queued");
+    }
+
+    #[tokio::test]
+    async fn add_download_expanding_leaves_a_lone_video_without_a_playlist_id() {
+        let conn = Connection::open_in_memory().unwrap();
+        persistence::migrate_for_test(&conn);
+        let db: Db = Arc::new(Mutex::new(conn));
+
+        // `--flat-playlist` on a lone video returns no `entries` key at all —
+        // reuse the fake binary path but with a title-only script.
+        let path = std::env::temp_dir().join(format!("begirex-fake-ytdlp-solo-{}", std::process::id()));
+        std::fs::write(&path, "#!/bin/sh\necho '{\"title\":\"Solo video\"}'\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let emitter: Arc<dyn Emitter> = Arc::new(NoopEmitter::default());
+        let registry: ActiveRegistry = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let binaries = BinaryPaths {
+            ytdlp_path: path.to_string_lossy().to_string(),
+            ffmpeg_path: "ffmpeg".into(),
+        };
+
+        let items = add_download_expanding(
+            db,
+            emitter,
+            binaries,
+            0,
+            registry,
+            AddDownloadParams {
+                url: "https://example.invalid/watch?v=solo".into(),
+                format_expr: "bv*+ba/b".into(),
+                output_dir: "/tmp/out".into(),
+                output_template: "%(title)s.%(ext)s".into(),
+                proxy: None,
+                extra_args: None,
+                preset_id: None,
+                playlist_id: None,
+                title: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].playlist_id, None);
+        assert_eq!(items[0].url, "https://example.invalid/watch?v=solo");
     }
 }

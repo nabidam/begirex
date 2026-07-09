@@ -49,6 +49,10 @@ pub struct NewItem {
     pub extra_args: Option<String>,
     pub preset_id: Option<i64>,
     pub stage: String, // "downloading" or "queued", decided by the caller (spawn-if-<2-active)
+    // T19: groups playlist-derived rows (ARCHITECTURE §3 `playlist_id`); both
+    // `None` for a lone video, same as every pre-T19 caller.
+    pub playlist_id: Option<String>,
+    pub title: Option<String>,
 }
 
 const ITEM_COLUMNS: &str = "id, url, playlist_id, title, stage, format_expr, output_dir,
@@ -98,9 +102,11 @@ pub fn insert_item(conn: &Connection, new: NewItem) -> Result<Item, AppError> {
             output_template, proxy, extra_args, preset_id, total_bytes, downloaded_bytes,
             percent, speed_bps, eta_seconds, resume_capable, output_path, error_message,
             queue_position, created_at, updated_at)
-         VALUES (?1, NULL, NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, 0, 0, NULL, NULL, 1, NULL, NULL, ?9, ?10, ?10)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, 0, 0, NULL, NULL, 1, NULL, NULL, ?11, ?12, ?12)",
         rusqlite::params![
             new.url,
+            new.playlist_id,
+            new.title,
             new.stage,
             new.format_expr,
             new.output_dir,
@@ -685,6 +691,8 @@ mod tests {
             extra_args: None,
             preset_id: None,
             stage: stage.into(),
+            playlist_id: None,
+            title: None,
         }
     }
 

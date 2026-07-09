@@ -519,6 +519,117 @@ pub async fn probe(ytdlp_path: &str, url: &str, proxy: Option<&str>) -> Result<P
     })
 }
 
+#[derive(Debug, Deserialize)]
+struct YtDlpPlaylistEntryJson {
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    webpage_url: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct YtDlpPlaylistJson {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    webpage_url: Option<String>,
+    #[serde(default)]
+    entries: Option<Vec<YtDlpPlaylistEntryJson>>,
+}
+
+/// One resolved row a playlist expands to: a URL plus its title, if yt-dlp's
+/// flat listing provided one (T19, ARCHITECTURE §2 "queue_manager owns
+/// playlist expansion").
+#[derive(Debug, Clone)]
+pub struct PlaylistEntry {
+    pub url: String,
+    pub title: Option<String>,
+}
+
+/// Result of expanding a submitted URL. `playlist_id` is `Some` only when
+/// yt-dlp reported more than one entry (a real playlist, K2-AC3/V2-AC2);
+/// a lone video always comes back as exactly one `PlaylistEntry` with
+/// `playlist_id: None` so `add_download`'s caller never has to branch on
+/// entry count itself.
+#[derive(Debug, Clone)]
+pub struct PlaylistExpansion {
+    pub playlist_id: Option<String>,
+    pub entries: Vec<PlaylistEntry>,
+}
+
+/// Runs `yt-dlp -J --flat-playlist` for `url` (T19, ARCHITECTURE §2
+/// "queue_manager owns playlist expansion"). Flat mode keeps this cheap even
+/// for large playlists — no per-video format probe, just id/title/url. A
+/// lone video still round-trips through here (yt-dlp returns it with no
+/// `entries` key, or a single-element one) so the expand-then-add path in
+/// `queue_manager` stays uniform for both shapes.
+pub async fn expand_playlist(ytdlp_path: &str, url: &str, proxy: Option<&str>) -> Result<PlaylistExpansion, AppError> {
+    let mut cmd = Command::new(ytdlp_path);
+    cmd.arg("-J").arg("--flat-playlist");
+    if let Some(proxy) = proxy.filter(|p| !p.is_empty()) {
+        cmd.arg("--proxy").arg(proxy);
+    }
+    cmd.arg(url);
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let output = cmd.output().await.map_err(|e| AppError::ProbeFailed {
+        message: format!("failed to run yt-dlp: {e}"),
+        stderr: None,
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(AppError::ProbeFailed {
+            message: "playlist expansion failed".into(),
+            stderr: Some(stderr),
+        });
+    }
+
+    parse_playlist_json(&String::from_utf8_lossy(&output.stdout), url)
+}
+
+/// Pure JSON→`PlaylistExpansion` mapping (factored out of `expand_playlist`
+/// so it's unit-testable without spawning a real process, same pattern as
+/// `map_format`/`probe`).
+fn parse_playlist_json(raw: &str, submitted_url: &str) -> Result<PlaylistExpansion, AppError> {
+    let parsed: YtDlpPlaylistJson = serde_json::from_str(raw).map_err(|e| AppError::ProbeFailed {
+        message: format!("could not parse yt-dlp output: {e}"),
+        stderr: None,
+    })?;
+
+    match parsed.entries {
+        Some(raw_entries) if raw_entries.len() > 1 => {
+            // ponytail: some extractors' flat entries carry a bare video id in
+            // `url` rather than a directly fetchable link — `webpage_url` (when
+            // present) is preferred for exactly that reason. Upgrade path: a
+            // per-extractor URL builder, if a site without `webpage_url` bites.
+            let entries: Vec<PlaylistEntry> = raw_entries
+                .into_iter()
+                .filter_map(|e| {
+                    let url = e.webpage_url.or(e.url)?;
+                    Some(PlaylistEntry { url, title: e.title })
+                })
+                .collect();
+            let playlist_id = parsed
+                .id
+                .or(parsed.webpage_url)
+                .or_else(|| Some(submitted_url.to_string()));
+            Ok(PlaylistExpansion { playlist_id, entries })
+        }
+        _ => Ok(PlaylistExpansion {
+            playlist_id: None,
+            entries: vec![PlaylistEntry {
+                url: submitted_url.to_string(),
+                title: parsed.title,
+            }],
+        }),
+    }
+}
+
 /// A tiny fake yt-dlp `-J` payload covering the full height range (audio,
 /// 480p..4320p) so any reasonable height/resolution filter still has
 /// candidates to select from — `--load-info-json` runs `format_expr`
@@ -789,6 +900,62 @@ mod tests {
         assert!(map_format(audio_only).has_audio);
     }
 
+    // --- T19: playlist expansion ---------------------------------------------
+
+    #[test]
+    fn parse_playlist_json_expands_multi_entry_playlist_sharing_a_playlist_id() {
+        let raw = r#"{
+            "id": "PL123",
+            "entries": [
+                {"webpage_url": "https://example.invalid/watch?v=a", "title": "A"},
+                {"url": "https://example.invalid/watch?v=b", "title": "B"}
+            ]
+        }"#;
+        let expansion = parse_playlist_json(raw, "https://example.invalid/playlist?list=PL123").unwrap();
+        assert_eq!(expansion.playlist_id, Some("PL123".to_string()));
+        assert_eq!(expansion.entries.len(), 2);
+        assert_eq!(expansion.entries[0].url, "https://example.invalid/watch?v=a");
+        assert_eq!(expansion.entries[0].title, Some("A".to_string()));
+        assert_eq!(expansion.entries[1].url, "https://example.invalid/watch?v=b");
+    }
+
+    #[test]
+    fn parse_playlist_json_treats_lone_video_as_a_single_non_playlist_entry() {
+        let raw = r#"{"title": "Solo video"}"#;
+        let expansion = parse_playlist_json(raw, "https://example.invalid/watch?v=x").unwrap();
+        assert_eq!(expansion.playlist_id, None);
+        assert_eq!(expansion.entries.len(), 1);
+        assert_eq!(expansion.entries[0].url, "https://example.invalid/watch?v=x");
+        assert_eq!(expansion.entries[0].title, Some("Solo video".to_string()));
+    }
+
+    #[test]
+    fn parse_playlist_json_treats_single_element_entries_as_non_playlist() {
+        // A playlist URL that resolves to exactly one entry (e.g. a playlist of
+        // one) should not get a `playlist_id` — matches "expansion only fires
+        // for >1 entries" (T19-AC1).
+        let raw = r#"{"id": "PL1", "entries": [{"url": "https://example.invalid/watch?v=a", "title": "A"}]}"#;
+        let expansion = parse_playlist_json(raw, "https://example.invalid/playlist?list=PL1").unwrap();
+        assert_eq!(expansion.playlist_id, None);
+        assert_eq!(expansion.entries.len(), 1);
+    }
+
+    #[test]
+    fn parse_playlist_json_skips_entries_with_no_resolvable_url() {
+        let raw = r#"{
+            "id": "PL9",
+            "entries": [
+                {"webpage_url": "https://example.invalid/watch?v=a", "title": "A"},
+                {"title": "dead, no url or webpage_url"},
+                {"url": "https://example.invalid/watch?v=c", "title": "C"}
+            ]
+        }"#;
+        let expansion = parse_playlist_json(raw, "https://example.invalid/playlist?list=PL9").unwrap();
+        assert_eq!(expansion.entries.len(), 2);
+        assert_eq!(expansion.entries[0].url, "https://example.invalid/watch?v=a");
+        assert_eq!(expansion.entries[1].url, "https://example.invalid/watch?v=c");
+    }
+
     // --- T16: pre-spawn health check -----------------------------------------
 
     fn new_test_item(conn: &Connection, url: &str, stage: &str) -> persistence::Item {
@@ -803,6 +970,8 @@ mod tests {
                 extra_args: None,
                 preset_id: None,
                 stage: stage.into(),
+                playlist_id: None,
+                title: None,
             },
         )
         .unwrap()

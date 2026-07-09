@@ -304,15 +304,17 @@ fn check_duplicate(conn: &rusqlite::Connection, url: &str, force: bool) -> Resul
     Ok(())
 }
 
-/// Adds one download and routes the scheduling decision ("spawn if fewer
-/// than N active, else queue") through `queue_manager` (ARCHITECTURE §7.2,
-/// §4/T3) — ipc.rs only resolves inputs (settings/binary paths) and stays
-/// thin. T2 only ever produces exactly 1 item — playlist expansion (N items)
-/// is T19's job.
+/// Adds a download and routes the scheduling decision ("spawn if fewer than
+/// N active, else queue") through `queue_manager` (ARCHITECTURE §7.2, §4/T3)
+/// — ipc.rs only resolves inputs (settings/binary paths) and stays thin. T19:
+/// every submitted URL goes through `queue_manager::add_download_expanding`,
+/// which expands a real playlist into N independently-scheduled rows sharing
+/// a `playlist_id` and passes a lone video through as the one row it always
+/// was (ARCHITECTURE §7.2 "N rows for a playlist").
 #[tauri::command]
-pub fn add_download(
+pub async fn add_download(
     app: AppHandle,
-    state: State<AppState>,
+    state: State<'_, AppState>,
     request: AddDownloadRequest,
 ) -> Result<AddDownloadResponse, AppError> {
     if request.url.trim().is_empty() {
@@ -326,36 +328,41 @@ pub fn add_download(
         });
     }
 
-    let conn = state.db.lock().expect("db mutex poisoned");
-    check_duplicate(&conn, &request.url, request.force.unwrap_or(false))?;
-    let settings = settings_service::get_settings(&conn)?;
+    let (ytdlp_path, ffmpeg_path, output_dir, output_template, proxy, n_slots) = {
+        let conn = state.db.lock().expect("db mutex poisoned");
+        check_duplicate(&conn, &request.url, request.force.unwrap_or(false))?;
+        let settings = settings_service::get_settings(&conn)?;
 
-    let ytdlp_path = binary_manager::detect(&conn, &Which::Ytdlp)?
-        .path
-        .ok_or_else(|| AppError::BinaryNotFound {
-            message: "yt-dlp not found; set its path in Settings".into(),
-        })?;
-    let ffmpeg_path = binary_manager::detect(&conn, &Which::Ffmpeg)?
-        .path
-        .ok_or_else(|| AppError::BinaryNotFound {
-            message: "ffmpeg not found; set its path in Settings".into(),
-        })?;
+        let ytdlp_path = binary_manager::detect(&conn, &Which::Ytdlp)?
+            .path
+            .ok_or_else(|| AppError::BinaryNotFound {
+                message: "yt-dlp not found; set its path in Settings".into(),
+            })?;
+        let ffmpeg_path = binary_manager::detect(&conn, &Which::Ffmpeg)?
+            .path
+            .ok_or_else(|| AppError::BinaryNotFound {
+                message: "ffmpeg not found; set its path in Settings".into(),
+            })?;
 
-    let output_dir = request
-        .output_dir
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| settings.default_output_dir.clone());
-    let output_template = request
-        .output_template
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| settings.default_output_template.clone());
-    let proxy = request
-        .proxy
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| settings.global_proxy.clone());
-    let n_slots = settings.default_concurrency;
+        let output_dir = request
+            .output_dir
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| settings.default_output_dir.clone());
+        let output_template = request
+            .output_template
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| settings.default_output_template.clone());
+        let proxy = request
+            .proxy
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| settings.global_proxy.clone());
+        let n_slots = settings.default_concurrency;
 
-    drop(conn);
+        (ytdlp_path, ffmpeg_path, output_dir, output_template, proxy, n_slots)
+    };
 
     let db = Arc::clone(&state.db);
     let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter::new(app.clone()));
@@ -364,11 +371,12 @@ pub fn add_download(
         ffmpeg_path,
     };
 
-    let item = queue_manager::add_and_schedule(
+    let items = queue_manager::add_download_expanding(
         db,
         emitter,
         binaries,
         n_slots,
+        Arc::clone(&state.registry),
         AddDownloadParams {
             url: request.url,
             format_expr: request.format_expr,
@@ -377,11 +385,13 @@ pub fn add_download(
             proxy,
             extra_args: request.extra_args,
             preset_id: request.preset_id,
+            playlist_id: None,
+            title: None,
         },
-        Arc::clone(&state.registry),
-    )?;
+    )
+    .await?;
 
-    Ok(AddDownloadResponse { items: vec![item] })
+    Ok(AddDownloadResponse { items })
 }
 
 /// Resolves the binary paths + current concurrency the T6 lifecycle
@@ -868,6 +878,8 @@ mod tests {
                 extra_args: None,
                 preset_id: None,
                 stage: stage.into(),
+                playlist_id: None,
+                title: None,
             },
         )
         .unwrap()
