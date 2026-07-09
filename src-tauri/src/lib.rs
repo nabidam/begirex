@@ -89,6 +89,28 @@ pub fn run() {
             let conn = persistence::open_and_init(&db_path, &downloads_dir.to_string_lossy())
                 .expect("failed to open/migrate/seed database");
 
+            // T20: bundled flavor only — seed ytdlp_path/ffmpeg_path to the
+            // binaries packaged alongside the app (ARCHITECTURE §9), so S1
+            // never has to detect them. Compiled out entirely on a `light`
+            // build (no `resource_dir()` call, no seeding).
+            #[cfg(feature = "bundled")]
+            {
+                let resource_dir = app
+                    .path()
+                    .resource_dir()
+                    .expect("resource dir must be resolvable in a bundled build");
+                let ytdlp_path =
+                    binary_manager::bundled_binary_path(&resource_dir, binary_manager::Which::Ytdlp);
+                let ffmpeg_path =
+                    binary_manager::bundled_binary_path(&resource_dir, binary_manager::Which::Ffmpeg);
+                persistence::seed_bundled_binaries(
+                    &conn,
+                    &ytdlp_path.to_string_lossy(),
+                    &ffmpeg_path.to_string_lossy(),
+                )
+                .expect("failed to seed bundled binary paths");
+            }
+
             let db = Arc::new(Mutex::new(conn));
             let registry: ActiveRegistry = Arc::new(Mutex::new(HashMap::new()));
             app.manage(AppState {

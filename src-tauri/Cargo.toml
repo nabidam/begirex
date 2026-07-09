@@ -7,6 +7,14 @@ edition = "2021"
 name = "begirex_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# T20: compile-time build flavor (ARCHITECTURE §9). Off (default) = `light`
+# — detect/download yt-dlp/ffmpeg like every task through T19 already did.
+# On = `bundled` — seeds ytdlp_path/ffmpeg_path to the binaries packaged
+# alongside the app (src-tauri/binaries/bin/, wired via
+# tauri.bundled.conf.json's `bundle.resources`) and skips S1 detection.
+[features]
+bundled = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

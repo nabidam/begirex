@@ -73,6 +73,7 @@ impl Emitter for RecordingEmitter {
     fn emit_item_added(&self, _item: &Item) {}
     fn emit_item_removed(&self, _item_id: i64) {}
     fn emit_log_line(&self, _item_id: i64, _stream: &str, _line: &str) {}
+    fn emit_binary_health(&self, _which: &str, _healthy: bool, _message: Option<&str>) {}
 }
 
 fn poll_item(
@@ -136,6 +137,8 @@ async fn third_add_queues_then_starts_on_slot_free_with_real_spawn() {
                 proxy: None,
                 extra_args: Some("--limit-rate 300K".to_string()),
                 preset_id: None,
+                playlist_id: None,
+                title: None,
             },
             Arc::clone(&registry),
         )
@@ -233,6 +236,8 @@ async fn kill_9_mid_download_then_reconcile_resumes_from_partial_bytes() {
             extra_args: Some("--limit-rate 80K".to_string()),
             preset_id: None,
             stage: "downloading".to_string(),
+            playlist_id: None,
+            title: None,
         },
     )
     .unwrap();

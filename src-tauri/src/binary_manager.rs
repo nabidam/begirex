@@ -69,7 +69,9 @@ impl Which {
 
     /// Destination file name once downloaded into app-data `bin/` — `.exe`
     /// suffix on Windows so it's directly runnable there without a shim.
-    fn binary_file_name(&self) -> String {
+    /// `pub(crate)`: also the name `bundled_binary_path` (T20) looks up
+    /// inside the packaged resource dir, same naming either way.
+    pub(crate) fn binary_file_name(&self) -> String {
         let base = self.command_name();
         if cfg!(target_os = "windows") {
             format!("{base}.exe")
@@ -85,6 +87,29 @@ impl Which {
             _ => None,
         }
     }
+}
+
+/// Compile-time build flavor (ARCHITECTURE §9) — mirrors into
+/// `settings.build_flavor` at seed time (`persistence::seed`). The `bundled`
+/// cargo feature is set only by the packaging build (T20's
+/// `tauri.bundled.conf.json` + `--features bundled`); ordinary `cargo
+/// build`/`tauri dev` stay `light`, so this can't change existing tests'
+/// behavior.
+pub fn build_flavor() -> &'static str {
+    if cfg!(feature = "bundled") {
+        "bundled"
+    } else {
+        "light"
+    }
+}
+
+/// Where a bundled build's shipped binary lives once packaged: the app's
+/// resolved Tauri resource dir, `bin/<name>[.exe]` (matches
+/// `tauri.bundled.conf.json`'s `bundle.resources` mapping of
+/// `binaries/bin/` → `bin/`). Only meaningful when `build_flavor() ==
+/// "bundled"`; the caller (lib.rs setup) gates on that.
+pub fn bundled_binary_path(resource_dir: &Path, which: Which) -> PathBuf {
+    resource_dir.join("bin").join(which.binary_file_name())
 }
 
 /// Runs `<path> --version`; "runnable" = exit 0 with a captured version line
@@ -378,6 +403,44 @@ mod tests {
         let detected = detect(&conn, &Which::Ytdlp).unwrap();
         assert!(detected.found);
         assert_eq!(detected.path.as_deref(), Some("/usr/bin/env"));
+    }
+
+    #[test]
+    fn bundled_seeded_path_is_detected_without_any_path_search() {
+        // T20 AC1's actual mechanism end to end: a resource dir with a
+        // runnable binary at the `bundled_binary_path` location, seeded via
+        // `persistence::seed_bundled_binaries` (as `lib.rs`'s
+        // `#[cfg(feature = "bundled")]` setup block does), is found by
+        // `detect()` purely from the persisted setting — no PATH search
+        // involved (unlike `set_path_persists_real_binary_and_detect_finds_it`
+        // above, which exercises the light-flavor PATH-search path).
+        let conn = Connection::open_in_memory().unwrap();
+        persistence::migrate_for_test(&conn);
+
+        // A real runnable path stands in for a packaged resource-dir binary
+        // — this test proves the seed→detect wire (no PATH search
+        // involved), not the `<resource_dir>/bin/<name>` joining, which
+        // `bundled_binary_path_joins_resource_dir_bin_and_file_name` above
+        // already covers.
+        persistence::seed_bundled_binaries(&conn, "/usr/bin/env", "/usr/bin/env").unwrap();
+
+        let detected = detect(&conn, &Which::Ytdlp).unwrap();
+        assert!(detected.found);
+        assert_eq!(detected.path.as_deref(), Some("/usr/bin/env"));
+        assert!(detected.version.is_some());
+    }
+
+    #[test]
+    fn build_flavor_is_light_without_the_bundled_feature() {
+        // This crate is compiled for tests without `--features bundled`.
+        assert_eq!(build_flavor(), "light");
+    }
+
+    #[test]
+    fn bundled_binary_path_joins_resource_dir_bin_and_file_name() {
+        let resource_dir = Path::new("/opt/begirex/resources");
+        let path = bundled_binary_path(resource_dir, Which::Ytdlp);
+        assert_eq!(path, resource_dir.join("bin").join(Which::Ytdlp.binary_file_name()));
     }
 
     #[test]

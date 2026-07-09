@@ -64,6 +64,7 @@ impl Emitter for RecordingEmitter {
     fn emit_item_added(&self, _item: &Item) {}
     fn emit_item_removed(&self, _item_id: i64) {}
     fn emit_log_line(&self, _item_id: i64, _stream: &str, _line: &str) {}
+    fn emit_binary_health(&self, _which: &str, _healthy: bool, _message: Option<&str>) {}
 }
 
 fn poll_item(
@@ -126,6 +127,8 @@ impl Harness {
                 proxy: None,
                 extra_args: extra_args.map(|s| s.to_string()),
                 preset_id: None,
+                playlist_id: None,
+                title: None,
             },
             Arc::clone(&self.registry),
         )

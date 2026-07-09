@@ -571,7 +571,7 @@ fn seed(conn: &Connection, default_output_dir: &str) -> rusqlite::Result<()> {
         ("default_concurrency", "2"),
         ("default_output_dir", default_output_dir),
         ("default_output_template", "%(title)s.%(ext)s"),
-        ("build_flavor", "light"),
+        ("build_flavor", crate::binary_manager::build_flavor()),
     ];
     for (key, value) in defaults {
         conn.execute(
@@ -579,6 +579,25 @@ fn seed(conn: &Connection, default_output_dir: &str) -> rusqlite::Result<()> {
             [key, value],
         )?;
     }
+    Ok(())
+}
+
+/// T20: on a `bundled` build only, seeds `ytdlp_path`/`ffmpeg_path` to the
+/// binaries packaged alongside the app (ARCHITECTURE §9 — bundled build
+/// seeds its shipped binaries and skips S1 detection). `INSERT OR IGNORE`
+/// like `seed`'s other defaults: first-run-only, so it never clobbers a path
+/// the user later changes via S7. No-op on a `light` build — the caller
+/// (`lib.rs` setup, gated on `binary_manager::build_flavor()`) only calls
+/// this when bundled.
+pub fn seed_bundled_binaries(conn: &Connection, ytdlp_path: &str, ffmpeg_path: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('ytdlp_path', ?1)",
+        [ytdlp_path],
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('ffmpeg_path', ?1)",
+        [ffmpeg_path],
+    )?;
     Ok(())
 }
 
@@ -658,6 +677,37 @@ mod tests {
             )
             .unwrap();
         assert_eq!(concurrency, "2");
+    }
+
+    #[test]
+    fn seed_sets_build_flavor_from_compile_time_flavor() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        seed(&conn, "/home/test/Downloads").unwrap();
+
+        let flavor: String = conn
+            .query_row("SELECT value FROM settings WHERE key = 'build_flavor'", [], |row| row.get(0))
+            .unwrap();
+        // This crate is compiled for tests without `--features bundled`.
+        assert_eq!(flavor, "light");
+    }
+
+    #[test]
+    fn seed_bundled_binaries_sets_paths_once_and_never_overwrites() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        seed(&conn, "/home/test/Downloads").unwrap();
+
+        seed_bundled_binaries(&conn, "/opt/begirex/bin/yt-dlp", "/opt/begirex/bin/ffmpeg").unwrap();
+        assert_eq!(get_setting(&conn, "ytdlp_path").unwrap().as_deref(), Some("/opt/begirex/bin/yt-dlp"));
+        assert_eq!(get_setting(&conn, "ffmpeg_path").unwrap().as_deref(), Some("/opt/begirex/bin/ffmpeg"));
+
+        // A user later picking a different path (S7 "Change…") writes via
+        // `set_setting`, not this fn — re-running seed_bundled_binaries (e.g.
+        // relaunch) must not clobber it.
+        set_setting(&conn, "ytdlp_path", "/custom/yt-dlp").unwrap();
+        seed_bundled_binaries(&conn, "/opt/begirex/bin/yt-dlp", "/opt/begirex/bin/ffmpeg").unwrap();
+        assert_eq!(get_setting(&conn, "ytdlp_path").unwrap().as_deref(), Some("/custom/yt-dlp"));
     }
 
     #[test]

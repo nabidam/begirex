@@ -85,6 +85,7 @@ impl Emitter for RecordingEmitter {
     fn emit_item_added(&self, _item: &Item) {}
     fn emit_item_removed(&self, _item_id: i64) {}
     fn emit_log_line(&self, _item_id: i64, _stream: &str, _line: &str) {}
+    fn emit_binary_health(&self, _which: &str, _healthy: bool, _message: Option<&str>) {}
 }
 
 #[tokio::test]
@@ -108,6 +109,8 @@ async fn add_download_completes_with_monotonic_progress_and_file_on_disk() {
             extra_args: None,
             preset_id: None,
             stage: "downloading".to_string(),
+            playlist_id: None,
+            title: None,
         },
     )
     .unwrap();
@@ -196,6 +199,8 @@ async fn invalid_format_expr_yields_error_stage_with_real_stderr() {
             extra_args: None,
             preset_id: None,
             stage: "downloading".to_string(),
+            playlist_id: None,
+            title: None,
         },
     )
     .unwrap();
