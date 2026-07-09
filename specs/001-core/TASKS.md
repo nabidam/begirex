@@ -345,6 +345,7 @@ Requirement ids (K/V/NFR/AC) → PRD.md; screen ids (S1–S7) → UX.md; command
 - **Completion artifact:** screenshot series covering onboarding download, parallel progress, and post-Retry resume.
 - **Difficulty:** M (full walk + keyboard pass).
 - **Context pack:** PLAN "Demo Gate 4"; UX.md Flow A + Flow D. No code.
+- **Status:** ✅ Done — verified by user.
 
 ---
 
