@@ -1,5 +1,5 @@
 <script lang="ts">
-  // S2 list (UX.md S2, TASKS.md T14) — the queue's rows region: virtualized
+  // S2 list (UX.md S2, TASKS.md T14/T24) — the queue's rows region: virtualized
   // list (T10's VirtualList), selection + bulk actions (SelectionBar),
   // per-row drag-reorder with a movement threshold, roving-tabindex keyboard
   // nav, and the confirm+undo-toast flow for Cancel/Remove (ARCHITECTURE §8
@@ -11,6 +11,9 @@
   import SelectionBar from "../components/SelectionBar.svelte";
   import VirtualList from "../components/VirtualList.svelte";
   import type { Item } from "../types";
+  import { Button } from "$lib/components/ui/button";
+  import * as AlertDialog from "$lib/components/ui/alert-dialog";
+  import { toast } from "svelte-sonner";
 
   let {
     items,
@@ -37,8 +40,10 @@
   let hiddenIds = $state<Set<number>>(new Set());
   let removeTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
-  let toast = $state<{ message: string; undo: () => void } | null>(null);
-  let toastTimer: ReturnType<typeof setTimeout> | undefined;
+  // Cancel/Remove confirm (shadcn alert-dialog, replacing the hand-rolled
+  // confirm()) — set by requestCancel/requestRemove, cleared once the user
+  // picks an option; the dialog itself never calls the store directly.
+  let confirmState = $state<{ kind: "cancel" | "remove"; ids: number[] } | null>(null);
 
   // Drag-reorder (DESIGN.md §4 gap #4): native pointer events, ~6px
   // movement threshold — below it, pointerup is treated as a row click.
@@ -133,46 +138,47 @@
     };
   });
 
-  function showUndoToast(message: string, undo: () => void) {
-    clearTimeout(toastTimer);
-    toast = {
-      message,
-      undo: () => {
-        undo();
-        toast = null;
-      },
-    };
-    toastTimer = setTimeout(() => {
-      toast = null;
-    }, TOAST_WINDOW_MS);
-  }
-
   function pluralize(n: number, noun: string): string {
     return `${n} ${noun}${n === 1 ? "" : "s"}`;
   }
 
-  // ponytail: native confirm() stands in for a proper alert-dialog
-  // component — same precedent as Presets.svelte's delete confirm.
-  // Upgrade path: a shared ConfirmDialog if a second real need appears.
-  async function requestCancel(ids: number[]) {
+  function requestCancel(ids: number[]) {
     if (ids.length === 0) return;
-    if (!confirm(`Cancel ${pluralize(ids.length, "download")}?`)) return;
-    await queueStore.bulk("cancel", ids);
-    ids.forEach((id) => selectedIds.delete(id));
-    selectedIds = new Set(selectedIds);
-    // ponytail: undo restores via retry_item (stage -> queued), the only
-    // backend verb that reverses a cancel — not necessarily the item's
-    // exact prior stage (e.g. a paused item restores to queued, not
-    // paused). Upgrade path: a dedicated uncancel command if that gap
-    // matters in practice.
-    showUndoToast(`Cancelled ${pluralize(ids.length, "item")}.`, () => {
-      ids.forEach((id) => queueStore.retry(id));
-    });
+    confirmState = { kind: "cancel", ids };
   }
 
   function requestRemove(ids: number[]) {
     if (ids.length === 0) return;
-    if (!confirm(`Remove ${pluralize(ids.length, "download")}?`)) return;
+    confirmState = { kind: "remove", ids };
+  }
+
+  // Runs only once the alert-dialog's destructive action is confirmed.
+  // Cancel is real immediately (the process must actually stop) with Undo
+  // calling `retry_item` to restore to `queued` — not necessarily the
+  // item's exact prior stage; ponytail: `retry_item` is the only backend
+  // verb that reverses a cancel. Remove hides ids client-side only and
+  // defers the real `bulk("remove")` call for TOAST_WINDOW_MS — Undo within
+  // the window just clears the timer and un-hides; nothing ever reaches the
+  // backend unless the window lapses.
+  async function confirmProceed() {
+    if (!confirmState) return;
+    const { kind, ids } = confirmState;
+    confirmState = null;
+
+    if (kind === "cancel") {
+      await queueStore.bulk("cancel", ids);
+      ids.forEach((id) => selectedIds.delete(id));
+      selectedIds = new Set(selectedIds);
+      toast(`Cancelled ${pluralize(ids.length, "item")}.`, {
+        duration: TOAST_WINDOW_MS,
+        action: {
+          label: "Undo",
+          onClick: () => ids.forEach((id) => queueStore.retry(id)),
+        },
+      });
+      return;
+    }
+
     const next = new Set(hiddenIds);
     ids.forEach((id) => next.add(id));
     hiddenIds = next;
@@ -185,12 +191,18 @@
     }, TOAST_WINDOW_MS);
     ids.forEach((id) => removeTimers.set(id, timer));
 
-    showUndoToast(`Removed ${pluralize(ids.length, "item")}.`, () => {
-      clearTimeout(timer);
-      ids.forEach((id) => removeTimers.delete(id));
-      const restored = new Set(hiddenIds);
-      ids.forEach((id) => restored.delete(id));
-      hiddenIds = restored;
+    toast(`Removed ${pluralize(ids.length, "item")}.`, {
+      duration: TOAST_WINDOW_MS,
+      action: {
+        label: "Undo",
+        onClick: () => {
+          clearTimeout(timer);
+          ids.forEach((id) => removeTimers.delete(id));
+          const restored = new Set(hiddenIds);
+          ids.forEach((id) => restored.delete(id));
+          hiddenIds = restored;
+        },
+      },
     });
   }
 
@@ -203,9 +215,9 @@
   }
 </script>
 
-<main class="queue">
+<main class="flex min-h-0 flex-1 flex-col">
   {#if queueStore.error}
-    <p class="error">{queueStore.error}</p>
+    <p class="px-4 py-2 text-[var(--error-token)]">{queueStore.error}</p>
   {/if}
 
   <SelectionBar
@@ -220,28 +232,35 @@
   />
 
   {#if visible.length > 0}
-    <div class="columns" role="row">
-      <span class="col-checkbox"></span>
-      <span class="col-title">Title</span>
-      <span class="col-size">Size</span>
-      <span class="col-progress">Status</span>
-      <span class="col-eta">ETA</span>
-      <span class="col-actions"></span>
+    <div
+      class="grid grid-cols-[2rem_minmax(6rem,1fr)_4.5rem_minmax(12rem,2fr)_3.5rem_2.5rem] gap-3 px-[1.6rem] text-[0.75em] tracking-wide text-muted-foreground uppercase"
+      role="row"
+    >
+      <span></span>
+      <span>Title</span>
+      <span class="text-end">Size</span>
+      <span>Status</span>
+      <span class="text-end">ETA</span>
+      <span></span>
     </div>
   {/if}
 
-  <div class="list-wrap" bind:clientHeight={listHeight}>
+  <div class="min-h-0 flex-1 px-4 py-2" bind:clientHeight={listHeight}>
     {#if visible.length === 0}
       {#if addDisabled}
-        <p class="empty">Downloads are disabled until yt-dlp/ffmpeg are set up — see Settings (sidebar) to finish setup.</p>
+        <p class="px-4 py-8 text-center text-muted-foreground">
+          Downloads are disabled until yt-dlp/ffmpeg are set up — see Settings (sidebar) to finish setup.
+        </p>
       {:else if totalCount === 0}
-        <p class="empty">
+        <p class="px-4 py-8 text-center text-muted-foreground">
           No downloads yet. Paste a link or press
-          <button type="button" class="link-btn" onclick={onAdd}>Add</button> to start.
+          <Button type="button" variant="link" class="h-auto p-0 align-baseline" onclick={onAdd}>Add</Button>
+          to start.
         </p>
       {:else}
-        <p class="empty">
-          Nothing here. <button type="button" class="link-btn" onclick={onShowAll}>Show all</button>
+        <p class="px-4 py-8 text-center text-muted-foreground">
+          Nothing here.
+          <Button type="button" variant="link" class="h-auto p-0 align-baseline" onclick={onShowAll}>Show all</Button>
         </p>
       {/if}
     {:else}
@@ -263,88 +282,27 @@
       </VirtualList>
     {/if}
   </div>
-
-  {#if toast}
-    <div class="toast" role="status">
-      <span>{toast.message}</span>
-      <button type="button" class="undo" onclick={() => toast?.undo()}>Undo</button>
-    </div>
-  {/if}
 </main>
 
-<style>
-  .queue {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
-  .list-wrap {
-    flex: 1;
-    min-height: 0;
-    padding: 0.5rem 1rem;
-  }
-  .columns {
-    display: grid;
-    grid-template-columns: 2rem minmax(6rem, 1fr) 4.5rem minmax(12rem, 2fr) 3.5rem 2.5rem;
-    gap: 0.75rem;
-    padding: 0 1.6rem;
-    color: var(--muted-foreground);
-    font-size: 0.75em;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-  }
-  .col-size,
-  .col-eta {
-    text-align: end;
-  }
-  .link-btn {
-    background: none;
-    border: none;
-    color: var(--primary);
-    text-decoration: underline;
-    cursor: pointer;
-    padding: 0;
-    font: inherit;
-  }
-  .link-btn:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 2px;
-  }
-  .empty {
-    color: var(--muted-foreground);
-    text-align: center;
-    padding: 2rem 1rem;
-  }
-  .error {
-    color: var(--error-token);
-    padding: 0.5rem 1rem;
-  }
-  .toast {
-    position: fixed;
-    inset-block-end: 1.5rem;
-    inset-inline-start: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    background: var(--surface-high);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 0.6rem 1rem;
-    z-index: 40;
-  }
-  .undo {
-    background: transparent;
-    border: none;
-    color: var(--primary);
-    font-weight: 700;
-    cursor: pointer;
-    padding: 0;
-  }
-  .undo:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 2px;
-  }
-</style>
+<AlertDialog.Root
+  open={confirmState !== null}
+  onOpenChange={(open) => {
+    if (!open) confirmState = null;
+  }}
+>
+  <AlertDialog.Content>
+    <AlertDialog.Header>
+      <AlertDialog.Title>
+        {confirmState?.kind === "cancel"
+          ? `Cancel ${pluralize(confirmState.ids.length, "download")}?`
+          : `Remove ${pluralize(confirmState?.ids.length ?? 0, "download")}?`}
+      </AlertDialog.Title>
+    </AlertDialog.Header>
+    <AlertDialog.Footer>
+      <AlertDialog.Cancel>Keep</AlertDialog.Cancel>
+      <AlertDialog.Action variant="destructive" onclick={confirmProceed}>
+        {confirmState?.kind === "cancel" ? "Cancel downloads" : "Remove"}
+      </AlertDialog.Action>
+    </AlertDialog.Footer>
+  </AlertDialog.Content>
+</AlertDialog.Root>

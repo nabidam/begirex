@@ -10,6 +10,7 @@
   import Onboarding from "./lib/views/Onboarding.svelte";
   import Shell from "./lib/views/Shell.svelte";
   import GlobalBanner from "./lib/components/GlobalBanner.svelte";
+  import { Toaster } from "$lib/components/ui/sonner";
 
   let ready = $state(false);
   let showQueue = $state(false);
@@ -56,6 +57,7 @@
 </script>
 
 <GlobalBanner onFix={handleFix} />
+<Toaster />
 
 {#if !ready}
   <main class="loading">Loading…</main>

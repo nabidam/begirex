@@ -34,35 +34,14 @@
   }
 </script>
 
-<div class="virtual-list" style:height="{height}px" onscroll={onScroll}>
-  <div class="spacer" style:height="{totalHeight}px">
-    <div class="window" style:transform="translateY({offsetY}px)">
+<div class="relative overflow-y-auto" style:height="{height}px" onscroll={onScroll}>
+  <div class="relative w-full" style:height="{totalHeight}px">
+    <div class="absolute start-0 top-0 w-full" style:transform="translateY({offsetY}px)">
       {#each visibleItems as item, i (startIndex + i)}
-        <div class="row" style:height="{itemHeight}px">
+        <div class="box-border w-full" style:height="{itemHeight}px">
           {@render row(item, startIndex + i)}
         </div>
       {/each}
     </div>
   </div>
 </div>
-
-<style>
-  .virtual-list {
-    overflow-y: auto;
-    position: relative;
-  }
-  .spacer {
-    position: relative;
-    width: 100%;
-  }
-  .window {
-    position: absolute;
-    inset-block-start: 0;
-    inset-inline-start: 0;
-    width: 100%;
-  }
-  .row {
-    width: 100%;
-    box-sizing: border-box;
-  }
-</style>

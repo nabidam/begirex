@@ -1,5 +1,5 @@
 <script lang="ts">
-  // QueueRow (UX.md S2, TASKS.md T14) — one dense queue row: selection
+  // QueueRow (UX.md S2, TASKS.md T14/T24) — one dense queue row: selection
   // checkbox, title, size, the inline-progress signature (StageToken + pill
   // bar + figures), ETA, and a row-overflow menu for contextual actions.
   // Drag-reorder and keyboard focus are orchestrated by Queue.svelte (needs
@@ -8,6 +8,19 @@
   import { queueStore } from "../stores/queue.svelte";
   import StageToken from "./StageToken.svelte";
   import type { Item } from "../types";
+  import { cn } from "$lib/utils";
+  import { Checkbox } from "$lib/components/ui/checkbox";
+  import { Button } from "$lib/components/ui/button";
+  import { Progress } from "$lib/components/ui/progress";
+  import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
+  import Ellipsis from "lucide-svelte/icons/ellipsis";
+  import Pause from "lucide-svelte/icons/pause";
+  import Play from "lucide-svelte/icons/play";
+  import RotateCcw from "lucide-svelte/icons/rotate-ccw";
+  import ArrowUp from "lucide-svelte/icons/arrow-up";
+  import ArrowDown from "lucide-svelte/icons/arrow-down";
+  import Ban from "lucide-svelte/icons/ban";
+  import Trash2 from "lucide-svelte/icons/trash-2";
 
   let {
     item,
@@ -35,9 +48,6 @@
 
   const ACTIVE_STAGES = new Set(["downloading", "merging"]);
   const TERMINAL_STAGES = new Set(["completed", "cancelled"]);
-
-  let menuOpen = $state(false);
-  let rowEl: HTMLDivElement | undefined = $state();
 
   function formatBytes(bytes: number | null): string {
     if (bytes == null) return "—";
@@ -69,26 +79,14 @@
       onOpenDetail(item.id);
     }
   }
-
-  function closeMenu() {
-    menuOpen = false;
-  }
-
-  $effect(() => {
-    if (!menuOpen) return;
-    function onWindowPointerDown(e: PointerEvent) {
-      if (rowEl && !rowEl.contains(e.target as Node)) closeMenu();
-    }
-    window.addEventListener("pointerdown", onWindowPointerDown);
-    return () => window.removeEventListener("pointerdown", onWindowPointerDown);
-  });
 </script>
 
 <div
-  bind:this={rowEl}
-  class="row"
-  class:selected
-  class:focused
+  class={cn(
+    "grid h-full grid-cols-[2rem_1fr_auto] items-center gap-2 rounded-lg border border-transparent px-[0.6rem] hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+    selected && "bg-secondary text-secondary-foreground",
+    focused && "border-ring",
+  )}
   data-row-id={item.id}
   role="row"
   aria-selected={selected}
@@ -97,229 +95,102 @@
   onfocus={() => onFocusRow(item.id)}
 >
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <span class="cell checkbox" onpointerdown={(e) => e.stopPropagation()}>
-    <input
-      type="checkbox"
+  <span class="flex items-center" onpointerdown={(e) => e.stopPropagation()}>
+    <Checkbox
       checked={selected}
-      onchange={() => onToggleSelect(item.id)}
+      onCheckedChange={() => onToggleSelect(item.id)}
       aria-label="Select {item.title ?? item.url}"
     />
   </span>
 
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="cell surface" onpointerdown={(e) => onPointerDown(item.id, e)}>
-    <span class="title" title={item.title ?? item.url}>{item.title ?? item.url}</span>
-    <span class="size mono">{formatBytes(item.total_bytes)}</span>
+  <div
+    class="grid min-w-0 cursor-pointer grid-cols-[minmax(6rem,1fr)_4.5rem_minmax(12rem,2fr)_3.5rem] items-center gap-3"
+    onpointerdown={(e) => onPointerDown(item.id, e)}
+  >
+    <span class="overflow-hidden text-ellipsis whitespace-nowrap text-[0.9em]" title={item.title ?? item.url}>
+      {item.title ?? item.url}
+    </span>
+    <span class="text-end font-mono text-[0.8em] text-muted-foreground">{formatBytes(item.total_bytes)}</span>
 
-    <div class="progress-region">
+    <div class="flex min-w-0 items-center gap-2">
       <StageToken stage={item.stage} />
-      <div class="bar-track" class:thick={ACTIVE_STAGES.has(item.stage)}>
-        <div class="bar-fill" style:width="{Math.min(100, Math.max(0, item.percent))}%"></div>
-      </div>
-      <span class="figures mono">{item.percent.toFixed(0)}%</span>
-      {#if item.speed_bps != null}<span class="figures mono">{formatSpeed(item.speed_bps)}</span>{/if}
+      <Progress
+        value={Math.min(100, Math.max(0, item.percent))}
+        class={cn("min-w-12 flex-1", ACTIVE_STAGES.has(item.stage) ? "h-2" : "h-1")}
+      />
+      <span class="shrink-0 font-mono text-[0.78em] text-muted-foreground">{item.percent.toFixed(0)}%</span>
+      {#if item.speed_bps != null}
+        <span class="shrink-0 font-mono text-[0.78em] text-muted-foreground">{formatSpeed(item.speed_bps)}</span>
+      {/if}
       {#if item.stage === "error" && item.error_message}
-        <span class="error-text">{item.error_message}</span>
-        <button type="button" class="retry-btn" onclick={() => queueStore.retry(item.id)}>Retry</button>
+        <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.78em] text-[var(--error-token)]">
+          {item.error_message}
+        </span>
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          class="shrink-0"
+          onclick={() => queueStore.retry(item.id)}
+        >
+          <RotateCcw aria-hidden="true" />
+          Retry
+        </Button>
       {/if}
     </div>
 
-    <span class="eta mono">{formatEta(item.eta_seconds)}</span>
+    <span class="text-end font-mono text-[0.8em] text-muted-foreground">{formatEta(item.eta_seconds)}</span>
   </div>
 
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <span class="cell actions" onpointerdown={(e) => e.stopPropagation()}>
-    <button
-      type="button"
-      class="icon-btn"
-      onclick={() => (menuOpen = !menuOpen)}
-      aria-label="Row actions"
-      aria-expanded={menuOpen}
-    >
-      ⋯
-    </button>
-    {#if menuOpen}
-      <ul class="menu" role="menu">
+  <span class="relative" onpointerdown={(e) => e.stopPropagation()}>
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger>
+        {#snippet child({ props })}
+          <Button {...props} type="button" variant="ghost" size="icon-sm" aria-label="Row actions">
+            <Ellipsis aria-hidden="true" />
+          </Button>
+        {/snippet}
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Content align="end">
         {#if ACTIVE_STAGES.has(item.stage)}
-          <li><button type="button" onclick={() => { queueStore.pause(item.id); closeMenu(); }}>Pause</button></li>
+          <DropdownMenu.Item onclick={() => queueStore.pause(item.id)}>
+            <Pause aria-hidden="true" />
+            Pause
+          </DropdownMenu.Item>
         {:else if item.stage === "paused"}
-          <li><button type="button" onclick={() => { queueStore.resume(item.id); closeMenu(); }}>Resume</button></li>
+          <DropdownMenu.Item onclick={() => queueStore.resume(item.id)}>
+            <Play aria-hidden="true" />
+            Resume
+          </DropdownMenu.Item>
         {:else if item.stage === "error"}
-          <li><button type="button" onclick={() => { queueStore.retry(item.id); closeMenu(); }}>Retry</button></li>
+          <DropdownMenu.Item onclick={() => queueStore.retry(item.id)}>
+            <RotateCcw aria-hidden="true" />
+            Retry
+          </DropdownMenu.Item>
         {/if}
         {#if item.stage === "queued"}
-          <li><button type="button" onclick={() => { queueStore.moveUp(item.id); closeMenu(); }}>Move up</button></li>
-          <li><button type="button" onclick={() => { queueStore.moveDown(item.id); closeMenu(); }}>Move down</button></li>
+          <DropdownMenu.Item onclick={() => queueStore.moveUp(item.id)}>
+            <ArrowUp aria-hidden="true" />
+            Move up
+          </DropdownMenu.Item>
+          <DropdownMenu.Item onclick={() => queueStore.moveDown(item.id)}>
+            <ArrowDown aria-hidden="true" />
+            Move down
+          </DropdownMenu.Item>
         {/if}
         {#if !TERMINAL_STAGES.has(item.stage)}
-          <li><button type="button" onclick={() => { onCancelRequest([item.id]); closeMenu(); }}>Cancel</button></li>
+          <DropdownMenu.Item onclick={() => onCancelRequest([item.id])}>
+            <Ban aria-hidden="true" />
+            Cancel
+          </DropdownMenu.Item>
         {/if}
-        <li><button type="button" onclick={() => { onRemoveRequest([item.id]); closeMenu(); }}>Remove</button></li>
-      </ul>
-    {/if}
+        <DropdownMenu.Item variant="destructive" onclick={() => onRemoveRequest([item.id])}>
+          <Trash2 aria-hidden="true" />
+          Remove
+        </DropdownMenu.Item>
+      </DropdownMenu.Content>
+    </DropdownMenu.Root>
   </span>
 </div>
-
-<style>
-  .row {
-    display: grid;
-    grid-template-columns: 2rem 1fr auto;
-    align-items: center;
-    gap: 0.5rem;
-    height: 100%;
-    padding-inline: 0.6rem;
-    border-radius: var(--radius);
-    border: 1px solid transparent;
-  }
-  .row:hover {
-    background: var(--accent);
-  }
-  .row.selected {
-    background: var(--secondary);
-    color: var(--secondary-foreground);
-  }
-  .row.focused {
-    border-color: var(--ring);
-  }
-  .row:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: -2px;
-  }
-  .cell {
-    display: flex;
-    align-items: center;
-  }
-  .checkbox input {
-    width: 1rem;
-    height: 1rem;
-    accent-color: var(--primary);
-  }
-  .surface {
-    display: grid;
-    grid-template-columns: minmax(6rem, 1fr) 4.5rem minmax(12rem, 2fr) 3.5rem;
-    align-items: center;
-    gap: 0.75rem;
-    min-width: 0;
-    cursor: pointer;
-  }
-  .title {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.9em;
-  }
-  .size,
-  .eta {
-    font-size: 0.8em;
-    color: var(--muted-foreground);
-    text-align: end;
-  }
-  .mono {
-    font-family: var(--font-mono);
-  }
-  .progress-region {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    min-width: 0;
-  }
-  .bar-track {
-    flex: 1;
-    min-width: 3rem;
-    height: 4px;
-    border-radius: 999px;
-    background: var(--muted);
-    overflow: hidden;
-  }
-  .bar-track.thick {
-    height: 8px;
-  }
-  .bar-fill {
-    height: 100%;
-    background: var(--primary);
-    border-radius: 999px;
-    transition: width 200ms linear;
-  }
-  .figures {
-    font-size: 0.78em;
-    color: var(--muted-foreground);
-    flex-shrink: 0;
-  }
-  .error-text {
-    font-family: var(--font-mono);
-    font-size: 0.78em;
-    color: var(--error-token);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-  }
-  .retry-btn {
-    flex-shrink: 0;
-    background: var(--input);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 0.1rem 0.5rem;
-    font-size: 0.78em;
-    cursor: pointer;
-  }
-  .retry-btn:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 2px;
-  }
-  .actions {
-    position: relative;
-  }
-  .icon-btn {
-    background: transparent;
-    border: none;
-    color: var(--muted-foreground);
-    cursor: pointer;
-    padding: 0.2rem 0.5rem;
-    font-size: 1em;
-    border-radius: var(--radius);
-  }
-  .icon-btn:hover {
-    background: var(--accent);
-  }
-  .icon-btn:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 2px;
-  }
-  .menu {
-    position: absolute;
-    inset-inline-end: 0;
-    inset-block-start: 100%;
-    z-index: 10;
-    list-style: none;
-    margin: 0.2rem 0 0;
-    padding: 0.25rem;
-    min-width: 8rem;
-    background: var(--surface-high);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    display: flex;
-    flex-direction: column;
-    gap: 0.1rem;
-  }
-  .menu button {
-    width: 100%;
-    text-align: start;
-    background: transparent;
-    color: var(--foreground);
-    border: none;
-    border-radius: var(--radius);
-    padding: 0.35rem 0.5rem;
-    font-size: 0.85em;
-    font-family: var(--font-sans);
-    cursor: pointer;
-  }
-  .menu button:hover {
-    background: var(--accent);
-  }
-  .menu button:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: -2px;
-  }
-</style>
