@@ -5,6 +5,8 @@
   // deselects it). The full format table (all resolutions/codecs, sortable,
   // virtualized) is S4 (T10) — this only surfaces a handful of common picks.
   import type { Format } from "../types";
+  import { Toggle } from "$lib/components/ui/toggle";
+  import { Input } from "$lib/components/ui/input";
 
   let {
     formats,
@@ -72,86 +74,32 @@
   }
 </script>
 
-<div class="format-region">
+<div class="flex flex-col gap-2">
   {#if quickPicks.length > 0}
-    <div class="quick-picks" role="radiogroup" aria-label="Quick format picks">
+    <div class="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Quick format picks">
       {#each quickPicks as qp (qp.id)}
-        <button
+        <Toggle
           type="button"
-          class="quick-pick"
-          class:selected={selectedQuickPickId === qp.id}
+          variant="outline"
+          size="sm"
+          pressed={selectedQuickPickId === qp.id}
           role="radio"
           aria-checked={selectedQuickPickId === qp.id}
-          onclick={() => pick(qp)}
+          onPressedChange={() => pick(qp)}
         >
           {qp.label}
-        </button>
+        </Toggle>
       {/each}
     </div>
   {/if}
-  <label class="expression-field">
+  <label class="flex flex-col gap-1 text-[0.85em] text-muted-foreground">
     <span>Expression</span>
-    <input
+    <Input
       type="text"
-      class="expression-input"
+      class="font-mono"
       bind:value={expression}
       oninput={onExpressionInput}
       placeholder="bv*+ba/b"
     />
   </label>
 </div>
-
-<style>
-  .format-region {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-  .quick-picks {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
-  }
-  .quick-pick {
-    background: var(--input);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 0.3rem 0.6rem;
-    font-family: var(--font-sans);
-    font-size: 0.85em;
-    cursor: pointer;
-  }
-  .quick-pick:hover {
-    background: var(--accent);
-  }
-  .quick-pick:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 2px;
-  }
-  .quick-pick.selected {
-    background: var(--secondary);
-    color: var(--secondary-foreground);
-    border-color: var(--ring);
-    font-weight: 700;
-  }
-  .expression-field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    color: var(--muted-foreground);
-    font-size: 0.85em;
-  }
-  .expression-input {
-    background: var(--input);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 0.4rem 0.6rem;
-    font-family: var(--font-mono);
-  }
-  .expression-input:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 2px;
-  }
-</style>

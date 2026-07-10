@@ -1,12 +1,21 @@
 <script lang="ts">
-  // S4 — Format Picker (UX.md, TASKS.md T10). Modal fallback over S3's Region
-  // 2: the full probed-format table (virtualized via VirtualList), with
-  // filter chips + text filter narrowing it, and row selection composing the
-  // raw expression mirrored back into S3's field. "Use format" writes the
+  // S4 — Format Picker (UX.md, TASKS.md T10, migrated to shadcn/lucide at
+  // T25). Modal fallback over S3's Region 2: the full probed-format table
+  // (virtualized via VirtualList, untouched by T25), with filter chips +
+  // text filter narrowing it, and row selection composing the raw
+  // expression mirrored back into S3's field. "Use format" writes the
   // composed expression back, deselects S3's quick-pick group (Flow B step
   // 3), and closes.
   import type { Format } from "../types";
   import VirtualList from "./VirtualList.svelte";
+  import * as Dialog from "$lib/components/ui/dialog";
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import { Toggle } from "$lib/components/ui/toggle";
+  import { cn } from "$lib/utils";
+  import Search from "lucide-svelte/icons/search";
+  import Check from "lucide-svelte/icons/check";
+  import X from "lucide-svelte/icons/x";
 
   let {
     open = $bindable(false),
@@ -131,7 +140,23 @@
     close();
   }
 
-  function handleKeydown(e: KeyboardEvent) {
+  function onOpenChange(next: boolean) {
+    open = next;
+  }
+
+  // ponytail: same bits-ui-Escape-vs-hand-rolled-priority reconciliation as
+  // AddDownload.svelte (see its handleKeydown comment), plus one more layer
+  // here: S4 nests *inside* S3's Dialog.Content in the component tree, so a
+  // document-level Escape listener (bits' default) would keep bubbling past
+  // this dialog to S3's/S5's own handlers after closing S4 — the original
+  // hand-rolled scrim avoided that by stopping propagation locally, before
+  // it ever left this overlay. Reproduced here: `escapeKeydownBehavior`
+  // stays "ignore" (bits never auto-closes) and this local `onkeydown`
+  // (attached to Dialog.Content itself, firing during the bubble phase
+  // *before* the event would reach `document`/`window`) is the sole
+  // Escape-closes-S4 mechanism, stopped from propagating further — so a
+  // single Escape only ever closes the topmost overlay, matching T15 AC4.
+  function handleContentKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") {
       e.stopPropagation();
       close();
@@ -139,263 +164,117 @@
   }
 </script>
 
-{#if open}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="scrim" onclick={close} onkeydown={handleKeydown}>
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-      class="overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Formats for {title}"
-      tabindex="-1"
-      onclick={(e) => e.stopPropagation()}
-    >
-      <header>
-        <h2>Formats for &ldquo;{title}&rdquo;</h2>
-        <button type="button" class="icon-btn" onclick={close} aria-label="Close">✕</button>
-      </header>
-
-      <div class="filters">
-        <input
-          type="text"
-          class="filter-text"
-          bind:value={filterText}
-          placeholder="⌕ filter"
-          aria-label="Filter formats"
-        />
-        <label class="chip">
-          <input type="checkbox" bind:checked={showVideoOnly} />
-          video only
-        </label>
-        <label class="chip">
-          <input type="checkbox" bind:checked={showAudioOnly} />
-          audio only
-        </label>
-        <label class="chip">
-          <input type="checkbox" bind:checked={showFreeMerge} />
-          free-merge
-        </label>
-      </div>
-
-      {#if formats.length === 0}
-        <p class="empty">No formats returned — the site may require auth or the URL is not a media page.</p>
-      {:else if filtered.length === 0}
-        <p class="empty">No formats returned — the site may require auth or the URL is not a media page.</p>
-      {:else}
-        <div class="table-header" role="row">
-          <span>ID</span>
-          <span>RES</span>
-          <span>EXT</span>
-          <span>FPS</span>
-          <span>SIZE</span>
-          <span>CODEC</span>
-          <span>NOTE</span>
-        </div>
-        <VirtualList items={filtered} itemHeight={ROW_HEIGHT} height={TABLE_HEIGHT}>
-          {#snippet row(f: Format)}
-            {@const selected = f.id === selectedVideoId || f.id === selectedAudioId}
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <div
-              class="table-row"
-              class:selected
-              class:best={f.id === bestVideoId || f.id === bestAudioId}
-              role="row"
-              tabindex="0"
-              onclick={() => toggleRow(f)}
-              onkeydown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  toggleRow(f);
-                }
-              }}
-            >
-              <span class="mono">{f.id}</span>
-              <span>{f.resolution ?? "—"}</span>
-              <span>{f.ext}</span>
-              <span>{f.fps ?? "—"}</span>
-              <span class="mono">{sizeLabel(f.filesize)}</span>
-              <span class="mono">{f.codec ?? "—"}</span>
-              <span class="note">
-                {f.note ?? ""}
-                {#if f.id === bestVideoId || f.id === bestAudioId}<span class="best-badge">✓ pick</span>{/if}
-              </span>
-            </div>
-          {/snippet}
-        </VirtualList>
-      {/if}
-
-      <label class="expression-field">
-        <span>Expression</span>
-        <input
-          type="text"
-          class="mono"
-          bind:value={expression}
-          oninput={onExpressionInput}
-          placeholder="137+140"
-        />
-      </label>
-
-      <footer>
-        <button type="button" onclick={close}>Cancel</button>
-        <button type="button" disabled={!expression.trim()} onclick={useFormat}>Use format</button>
-      </footer>
+<Dialog.Root {open} {onOpenChange}>
+  <Dialog.Content
+    escapeKeydownBehavior="ignore"
+    showCloseButton={false}
+    onkeydown={handleContentKeydown}
+    class="flex max-h-[calc(100vh-4rem)] w-full max-w-[calc(100vw-2rem)] flex-col gap-3 sm:max-w-[42rem]"
+  >
+    <div class="flex items-center justify-between">
+      <Dialog.Title class="text-[1.05em]">Formats for &ldquo;{title}&rdquo;</Dialog.Title>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        class="text-muted-foreground"
+        onclick={close}
+        aria-label="Close"
+      >
+        <X aria-hidden="true" />
+      </Button>
     </div>
-  </div>
-{/if}
 
-<style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    background: color-mix(in srgb, var(--surface-lowest) 70%, transparent);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 60;
-  }
-  .overlay {
-    background: var(--card);
-    color: var(--card-foreground);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 1.25rem;
-    width: 42rem;
-    max-width: calc(100vw - 2rem);
-    max-height: calc(100vh - 4rem);
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  header h2 {
-    margin: 0;
-    font-size: 1.05em;
-  }
-  .icon-btn {
-    background: transparent;
-    border: none;
-    color: var(--muted-foreground);
-    cursor: pointer;
-    font-size: 1em;
-    padding: 0.2rem 0.4rem;
-  }
-  .icon-btn:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 2px;
-  }
-  .filters {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-  }
-  .filter-text {
-    flex: 1;
-    min-width: 8rem;
-  }
-  .chip {
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-    font-size: 0.85em;
-    color: var(--muted-foreground);
-    cursor: pointer;
-  }
-  input,
-  button {
-    background: var(--input);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 0.4rem 0.6rem;
-    font-family: var(--font-sans);
-  }
-  input.mono,
-  .mono {
-    font-family: var(--font-mono);
-  }
-  input:focus-visible,
-  button:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 2px;
-  }
-  button {
-    cursor: pointer;
-  }
-  button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  .empty {
-    color: var(--muted-foreground);
-    text-align: center;
-    padding: 1.5rem 0.5rem;
-    font-size: 0.9em;
-  }
-  .table-header,
-  .table-row {
-    display: grid;
-    grid-template-columns: 4rem 5rem 3.5rem 3rem 5rem 6rem 1fr;
-    gap: 0.5rem;
-    align-items: center;
-    padding-inline: 0.4rem;
-  }
-  .table-header {
-    color: var(--muted-foreground);
-    font-size: 0.75em;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-  }
-  .table-row {
-    font-size: 0.85em;
-    border-radius: var(--radius);
-    cursor: pointer;
-  }
-  .table-row:hover {
-    background: var(--accent);
-  }
-  .table-row:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: -2px;
-  }
-  .table-row.selected {
-    background: var(--secondary);
-    color: var(--secondary-foreground);
-  }
-  .table-row.best .note {
-    color: var(--primary);
-  }
-  .note {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .best-badge {
-    font-family: var(--font-mono);
-    font-size: 0.85em;
-    color: var(--primary);
-    flex-shrink: 0;
-  }
-  .expression-field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    color: var(--muted-foreground);
-    font-size: 0.85em;
-  }
-  footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-  }
-</style>
+    <div class="flex flex-wrap items-center gap-3">
+      <div class="relative min-w-32 flex-1">
+        <Search aria-hidden="true" class="pointer-events-none absolute inset-y-0 start-2.5 my-auto size-3.5 text-muted-foreground" />
+        <Input
+          type="text"
+          bind:value={filterText}
+          placeholder="filter"
+          aria-label="Filter formats"
+          class="ps-8"
+        />
+      </div>
+      <Toggle variant="outline" size="sm" bind:pressed={showVideoOnly}>video only</Toggle>
+      <Toggle variant="outline" size="sm" bind:pressed={showAudioOnly}>audio only</Toggle>
+      <Toggle variant="outline" size="sm" bind:pressed={showFreeMerge}>free-merge</Toggle>
+    </div>
+
+    {#if formats.length === 0}
+      <p class="px-2 py-6 text-center text-[0.9em] text-muted-foreground">
+        No formats returned — the site may require auth or the URL is not a media page.
+      </p>
+    {:else if filtered.length === 0}
+      <p class="px-2 py-6 text-center text-[0.9em] text-muted-foreground">
+        No formats returned — the site may require auth or the URL is not a media page.
+      </p>
+    {:else}
+      <div
+        class="grid grid-cols-[4rem_5rem_3.5rem_3rem_5rem_6rem_1fr] items-center gap-2 px-1.5 text-[0.75em] tracking-wide text-muted-foreground uppercase"
+        role="row"
+      >
+        <span>ID</span>
+        <span>RES</span>
+        <span>EXT</span>
+        <span>FPS</span>
+        <span>SIZE</span>
+        <span>CODEC</span>
+        <span>NOTE</span>
+      </div>
+      <VirtualList items={filtered} itemHeight={ROW_HEIGHT} height={TABLE_HEIGHT}>
+        {#snippet row(f: Format)}
+          {@const selected = f.id === selectedVideoId || f.id === selectedAudioId}
+          {@const best = f.id === bestVideoId || f.id === bestAudioId}
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <div
+            class={cn(
+              "grid grid-cols-[4rem_5rem_3.5rem_3rem_5rem_6rem_1fr] items-center gap-2 rounded-lg px-1.5 text-[0.85em] hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+              selected && "bg-secondary text-secondary-foreground hover:bg-secondary",
+            )}
+            role="row"
+            tabindex="0"
+            onclick={() => toggleRow(f)}
+            onkeydown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                toggleRow(f);
+              }
+            }}
+          >
+            <span class="font-mono">{f.id}</span>
+            <span>{f.resolution ?? "—"}</span>
+            <span>{f.ext}</span>
+            <span>{f.fps ?? "—"}</span>
+            <span class="font-mono">{sizeLabel(f.filesize)}</span>
+            <span class="font-mono">{f.codec ?? "—"}</span>
+            <span class="flex items-center gap-1.5 overflow-hidden text-ellipsis whitespace-nowrap">
+              {f.note ?? ""}
+              {#if best}
+                <span class={cn("flex shrink-0 items-center gap-0.5 font-mono", !selected && "text-primary")}>
+                  <Check aria-hidden="true" class="size-3.5" /> pick
+                </span>
+              {/if}
+            </span>
+          </div>
+        {/snippet}
+      </VirtualList>
+    {/if}
+
+    <label class="flex flex-col gap-1 text-[0.85em] text-muted-foreground">
+      <span>Expression</span>
+      <Input
+        type="text"
+        class="font-mono"
+        bind:value={expression}
+        oninput={onExpressionInput}
+        placeholder="137+140"
+      />
+    </label>
+
+    <div class="flex justify-end gap-2">
+      <Button type="button" variant="outline" onclick={close}>Cancel</Button>
+      <Button type="button" disabled={!expression.trim()} onclick={useFormat}>Use format</Button>
+    </div>
+  </Dialog.Content>
+</Dialog.Root>
