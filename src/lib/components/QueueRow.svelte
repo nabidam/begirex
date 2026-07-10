@@ -83,9 +83,9 @@
 
 <div
   class={cn(
-    "grid h-full grid-cols-[2rem_1fr_auto] items-center gap-2 rounded-lg border border-transparent px-[0.6rem] hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
-    selected && "bg-secondary text-secondary-foreground",
-    focused && "border-ring",
+    "grid h-full grid-cols-[2rem_1fr_auto] items-center gap-2 rounded-lg border border-transparent px-[0.6rem] hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+    selected && "bg-[var(--surface-high)]",
+    focused && "ring-2 ring-inset ring-ring",
   )}
   data-row-id={item.id}
   role="row"
@@ -111,7 +111,7 @@
     <span class="overflow-hidden text-ellipsis whitespace-nowrap text-[0.9em]" title={item.title ?? item.url}>
       {item.title ?? item.url}
     </span>
-    <span class="text-end font-mono text-[0.8em] text-muted-foreground">{formatBytes(item.total_bytes)}</span>
+    <span class="text-end font-mono text-xs text-muted-foreground">{formatBytes(item.total_bytes)}</span>
 
     <div class="flex min-w-0 items-center gap-2">
       <StageToken stage={item.stage} />
@@ -119,12 +119,12 @@
         value={Math.min(100, Math.max(0, item.percent))}
         class={cn("min-w-12 flex-1", ACTIVE_STAGES.has(item.stage) ? "h-2" : "h-1")}
       />
-      <span class="shrink-0 font-mono text-[0.78em] text-muted-foreground">{item.percent.toFixed(0)}%</span>
+      <span class="shrink-0 font-mono text-xs text-muted-foreground">{item.percent.toFixed(0)}%</span>
       {#if item.speed_bps != null}
-        <span class="shrink-0 font-mono text-[0.78em] text-muted-foreground">{formatSpeed(item.speed_bps)}</span>
+        <span class="shrink-0 font-mono text-xs text-muted-foreground">{formatSpeed(item.speed_bps)}</span>
       {/if}
       {#if item.stage === "error" && item.error_message}
-        <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[0.78em] text-[var(--error-token)]">
+        <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-[var(--error-token)]">
           {item.error_message}
         </span>
         <Button
@@ -140,7 +140,7 @@
       {/if}
     </div>
 
-    <span class="text-end font-mono text-[0.8em] text-muted-foreground">{formatEta(item.eta_seconds)}</span>
+    <span class="text-end font-mono text-xs text-muted-foreground">{formatEta(item.eta_seconds)}</span>
   </div>
 
   <!-- svelte-ignore a11y_no_static_element_interactions -->

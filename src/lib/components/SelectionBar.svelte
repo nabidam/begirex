@@ -14,7 +14,13 @@
 
   let {
     count,
-    onStart,
+    scope,
+    canResume,
+    canPause,
+    canCancel,
+    canRemove,
+    canReorder,
+    onResume,
     onPause,
     onCancel,
     onRemove,
@@ -23,7 +29,13 @@
     onClear,
   }: {
     count: number;
-    onStart: () => void;
+    scope: string;
+    canResume: boolean;
+    canPause: boolean;
+    canCancel: boolean;
+    canRemove: boolean;
+    canReorder: boolean;
+    onResume: () => void;
     onPause: () => void;
     onCancel: () => void;
     onRemove: () => void;
@@ -34,34 +46,47 @@
 </script>
 
 {#if count > 0}
-  <div class="flex items-center gap-2 border-y border-border bg-[var(--surface-high)] px-4 py-2" role="toolbar" aria-label="Bulk actions">
-    <span class="me-2 font-mono text-[0.85em] text-muted-foreground">{count} selected</span>
-    <Button type="button" variant="outline" size="sm" onclick={onStart}>
-      <Play aria-hidden="true" />
-      Start
-    </Button>
-    <Button type="button" variant="outline" size="sm" onclick={onPause}>
-      <Pause aria-hidden="true" />
-      Pause
-    </Button>
-    <Button type="button" variant="outline" size="sm" onclick={onCancel}>
-      <Ban aria-hidden="true" />
-      Cancel
-    </Button>
-    <Button type="button" variant="outline" size="sm" onclick={onRemove}>
-      <Trash2 aria-hidden="true" />
-      Remove
-    </Button>
-    <span class="flex gap-0.5">
-      <Button type="button" variant="ghost" size="icon-sm" aria-label="Move up" onclick={onMoveUp}>
-        <ArrowUp aria-hidden="true" />
+  <div class="border-y border-border bg-[var(--surface-high)] px-4 py-2" role="toolbar" aria-label="Bulk actions">
+    <div class="flex items-center gap-2">
+      <span class="me-2 font-mono text-xs text-muted-foreground">{count} selected · {scope}</span>
+      <span title={canResume ? undefined : "Resume is available only when every selected item is paused."}>
+        <Button type="button" variant="outline" size="sm" disabled={!canResume} onclick={onResume}>
+          <Play aria-hidden="true" />
+          Resume
+        </Button>
+      </span>
+      <span title={canPause ? undefined : "Pause is available only when every selected item is queued or active."}>
+        <Button type="button" variant="outline" size="sm" disabled={!canPause} onclick={onPause}>
+          <Pause aria-hidden="true" />
+          Pause
+        </Button>
+      </span>
+      <span title={canCancel ? undefined : "Cancel is unavailable when the selection includes completed or cancelled items."}>
+        <Button type="button" variant="outline" size="sm" disabled={!canCancel} onclick={onCancel}>
+          <Ban aria-hidden="true" />
+          Cancel
+        </Button>
+      </span>
+      <span title={canRemove ? undefined : "Remove is unavailable until every selected item is available."}>
+        <Button type="button" variant="outline" size="sm" disabled={!canRemove} onclick={onRemove}>
+          <Trash2 aria-hidden="true" />
+          Remove
+        </Button>
+      </span>
+      <span class="flex gap-0.5" title={canReorder ? undefined : "Reorder is available only when every selected item is queued."}>
+        <Button type="button" variant="ghost" size="icon-sm" aria-label="Move up" disabled={!canReorder} onclick={onMoveUp}>
+          <ArrowUp aria-hidden="true" />
+        </Button>
+        <Button type="button" variant="ghost" size="icon-sm" aria-label="Move down" disabled={!canReorder} onclick={onMoveDown}>
+          <ArrowDown aria-hidden="true" />
+        </Button>
+      </span>
+      <Button type="button" variant="ghost" size="sm" class="ms-auto text-muted-foreground" onclick={onClear}>
+        Clear selection
       </Button>
-      <Button type="button" variant="ghost" size="icon-sm" aria-label="Move down" onclick={onMoveDown}>
-        <ArrowDown aria-hidden="true" />
-      </Button>
-    </span>
-    <Button type="button" variant="ghost" size="sm" class="ms-auto text-muted-foreground" onclick={onClear}>
-      Clear selection
-    </Button>
+    </div>
+    <p class="mt-1 text-xs text-muted-foreground">
+      An action is enabled only when it applies to every selected download.
+    </p>
   </div>
 {/if}

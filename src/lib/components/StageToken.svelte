@@ -42,7 +42,7 @@
 
 <span
   class={cn(
-    "inline-flex items-center gap-1 whitespace-nowrap font-mono text-[0.85em]",
+    "inline-flex items-center gap-1 whitespace-nowrap font-mono text-xs",
     COLOR_CLASS[stage] ?? "text-muted-foreground",
   )}
 >

@@ -31,6 +31,14 @@
 
   const ROW_HEIGHT = 56;
   const TOAST_WINDOW_MS = 5000;
+  type BulkAction = "pause" | "resume" | "cancel" | "remove" | "reorder";
+  const BULK_ACTION_STAGES: Record<BulkAction, readonly string[]> = {
+    pause: ["downloading", "merging", "queued"],
+    resume: ["paused"],
+    cancel: ["downloading", "merging", "queued", "paused", "error"],
+    remove: ["downloading", "merging", "queued", "paused", "completed", "error", "cancelled"],
+    reorder: ["queued"],
+  };
 
   let listHeight = $state(0);
   let selectedIds = $state<Set<number>>(new Set());
@@ -53,6 +61,16 @@
   let dropId = $state<number | null>(null);
 
   const visible = $derived(items.filter((i) => !hiddenIds.has(i.id)));
+  const selectedItems = $derived(
+    queueStore.items.filter((item) => selectedIds.has(item.id) && !hiddenIds.has(item.id)),
+  );
+  const selectedStages = $derived([...new Set(selectedItems.map((item) => item.stage))]);
+  const focusedIndex = $derived(visible.findIndex((item) => item.id === focusedId));
+  const selectionScope = $derived(
+    selectedStages.length === 1
+      ? `all ${selectedStages[0]}`
+      : "mixed states",
+  );
 
   $effect(() => {
     if (visible.length === 0) {
@@ -60,6 +78,14 @@
     } else if (focusedId === null || !visible.some((i) => i.id === focusedId)) {
       focusedId = visible[0].id;
     }
+  });
+
+  // A stage event or external removal can invalidate a selection while the
+  // toolbar is open. Keep its scope tied to rows the user can still act on.
+  $effect(() => {
+    const visibleIds = new Set(visible.map((item) => item.id));
+    const next = new Set([...selectedIds].filter((id) => visibleIds.has(id)));
+    if (next.size !== selectedIds.size) selectedIds = next;
   });
 
   function toggleSelect(id: number) {
@@ -71,6 +97,19 @@
 
   function clearSelection() {
     selectedIds = new Set();
+  }
+
+  function canBulk(action: BulkAction, ids = [...selectedIds]): boolean {
+    return ids.length > 0 && ids.every((id) => {
+      const item = queueStore.items.find((candidate) => candidate.id === id);
+      return item != null && BULK_ACTION_STAGES[action].includes(item.stage);
+    });
+  }
+
+  function runBulk(action: Exclude<BulkAction, "reorder">) {
+    const ids = [...selectedIds];
+    if (!canBulk(action, ids)) return;
+    queueStore.bulk(action, ids);
   }
 
   function focusRow(id: number) {
@@ -87,8 +126,11 @@
 
   $effect(() => {
     if (focusedId === null) return;
-    const el = document.querySelector<HTMLElement>(`[data-row-id="${focusedId}"]`);
-    el?.focus();
+    const frame = requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLElement>(`[data-row-id="${focusedId}"]`);
+      el?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
   });
 
   function openDetail(id: number) {
@@ -143,12 +185,12 @@
   }
 
   function requestCancel(ids: number[]) {
-    if (ids.length === 0) return;
+    if (!canBulk("cancel", ids)) return;
     confirmState = { kind: "cancel", ids };
   }
 
   function requestRemove(ids: number[]) {
-    if (ids.length === 0) return;
+    if (!canBulk("remove", ids)) return;
     confirmState = { kind: "remove", ids };
   }
 
@@ -169,7 +211,7 @@
       await queueStore.bulk("cancel", ids);
       ids.forEach((id) => selectedIds.delete(id));
       selectedIds = new Set(selectedIds);
-      toast(`Cancelled ${pluralize(ids.length, "item")}.`, {
+      toast(`Canceled ${pluralize(ids.length, "download")}. Undo queues ${ids.length === 1 ? "it" : "them"} again.`, {
         duration: TOAST_WINDOW_MS,
         action: {
           label: "Undo",
@@ -191,7 +233,7 @@
     }, TOAST_WINDOW_MS);
     ids.forEach((id) => removeTimers.set(id, timer));
 
-    toast(`Removed ${pluralize(ids.length, "item")}.`, {
+    toast(`Removed ${pluralize(ids.length, "download")} from the queue. Undo keeps ${ids.length === 1 ? "it" : "them"} in the queue.`, {
       duration: TOAST_WINDOW_MS,
       action: {
         label: "Undo",
@@ -207,6 +249,7 @@
   }
 
   function moveSelected(direction: "up" | "down") {
+    if (!canBulk("reorder")) return;
     const ids = [...selectedIds];
     const ordered = direction === "up"
       ? ids.sort((a, b) => queueStore.items.findIndex((i) => i.id === a) - queueStore.items.findIndex((i) => i.id === b))
@@ -217,13 +260,21 @@
 
 <main class="flex min-h-0 flex-1 flex-col">
   {#if queueStore.error}
-    <p class="px-4 py-2 text-[var(--error-token)]">{queueStore.error}</p>
+    <p class="px-4 py-2 text-[var(--error-token)]" role="alert">
+      Queue action needs attention: {queueStore.error} Check the affected download, then try again.
+    </p>
   {/if}
 
   <SelectionBar
-    count={selectedIds.size}
-    onStart={() => queueStore.bulk("resume", [...selectedIds])}
-    onPause={() => queueStore.bulk("pause", [...selectedIds])}
+    count={selectedItems.length}
+    scope={selectionScope}
+    canResume={canBulk("resume")}
+    canPause={canBulk("pause")}
+    canCancel={canBulk("cancel")}
+    canRemove={canBulk("remove")}
+    canReorder={canBulk("reorder")}
+    onResume={() => runBulk("resume")}
+    onPause={() => runBulk("pause")}
     onCancel={() => requestCancel([...selectedIds])}
     onRemove={() => requestRemove([...selectedIds])}
     onMoveUp={() => moveSelected("up")}
@@ -233,8 +284,7 @@
 
   {#if visible.length > 0}
     <div
-      class="grid grid-cols-[2rem_minmax(6rem,1fr)_4.5rem_minmax(12rem,2fr)_3.5rem_2.5rem] gap-3 px-[1.6rem] text-[0.75em] tracking-wide text-muted-foreground uppercase"
-      role="row"
+      class="grid grid-cols-[2rem_minmax(6rem,1fr)_4.5rem_minmax(12rem,2fr)_3.5rem_2.5rem] gap-3 px-[1.6rem] text-xs tracking-wide text-muted-foreground uppercase"
     >
       <span></span>
       <span>Title</span>
@@ -249,7 +299,7 @@
     {#if visible.length === 0}
       {#if addDisabled}
         <p class="px-4 py-8 text-center text-muted-foreground">
-          Downloads are disabled until yt-dlp/ffmpeg are set up — see Settings (sidebar) to finish setup.
+          Downloads are unavailable until yt-dlp and ffmpeg are ready. Open Settings to finish setup.
         </p>
       {:else if totalCount === 0}
         <p class="px-4 py-8 text-center text-muted-foreground">
@@ -259,12 +309,12 @@
         </p>
       {:else}
         <p class="px-4 py-8 text-center text-muted-foreground">
-          Nothing here.
+          No downloads match the current filter or search.
           <Button type="button" variant="link" class="h-auto p-0 align-baseline" onclick={onShowAll}>Show all</Button>
         </p>
       {/if}
     {:else}
-      <VirtualList items={visible} itemHeight={ROW_HEIGHT} height={listHeight}>
+      <VirtualList items={visible} itemHeight={ROW_HEIGHT} height={listHeight} {focusedIndex}>
         {#snippet row(item: Item)}
           <QueueRow
             {item}
@@ -297,11 +347,20 @@
           ? `Cancel ${pluralize(confirmState.ids.length, "download")}?`
           : `Remove ${pluralize(confirmState?.ids.length ?? 0, "download")}?`}
       </AlertDialog.Title>
+      <AlertDialog.Description>
+        {#if confirmState?.kind === "cancel"}
+          Stops active downloads and marks the selection as canceled. Undo queues {confirmState.ids.length === 1 ? "it" : "them"} again.
+        {:else}
+          Removes the selection from this queue after five seconds. Undo keeps {confirmState?.ids.length === 1 ? "it" : "them"} in the queue.
+        {/if}
+      </AlertDialog.Description>
     </AlertDialog.Header>
     <AlertDialog.Footer>
-      <AlertDialog.Cancel>Keep</AlertDialog.Cancel>
+      <AlertDialog.Cancel>Keep downloads</AlertDialog.Cancel>
       <AlertDialog.Action variant="destructive" onclick={confirmProceed}>
-        {confirmState?.kind === "cancel" ? "Cancel downloads" : "Remove"}
+        {confirmState?.kind === "cancel"
+          ? `Cancel ${pluralize(confirmState.ids.length, "download")}`
+          : `Remove ${pluralize(confirmState?.ids.length ?? 0, "download")}`}
       </AlertDialog.Action>
     </AlertDialog.Footer>
   </AlertDialog.Content>

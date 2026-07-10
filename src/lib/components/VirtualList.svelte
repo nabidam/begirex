@@ -11,16 +11,19 @@
     itemHeight,
     height,
     buffer = 6,
+    focusedIndex = -1,
     row,
   }: {
     items: T[];
     itemHeight: number;
     height: number;
     buffer?: number;
+    focusedIndex?: number;
     row: Snippet<[T, number]>;
   } = $props();
 
   let scrollTop = $state(0);
+  let viewport = $state<HTMLDivElement | null>(null);
 
   let totalHeight = $derived(items.length * itemHeight);
   let visibleCount = $derived(Math.ceil(height / itemHeight));
@@ -32,9 +35,27 @@
   function onScroll(e: Event) {
     scrollTop = (e.currentTarget as HTMLDivElement).scrollTop;
   }
+
+  // Keep roving keyboard focus visible before the parent tries to focus the
+  // row. This preserves the virtualized DOM budget without losing context.
+  $effect(() => {
+    if (focusedIndex < 0 || !viewport) return;
+    const rowTop = focusedIndex * itemHeight;
+    const rowBottom = rowTop + itemHeight;
+    const viewportBottom = scrollTop + height;
+    const nextTop = rowTop < scrollTop
+      ? rowTop
+      : rowBottom > viewportBottom
+        ? rowBottom - height
+        : scrollTop;
+    if (nextTop !== scrollTop) {
+      viewport.scrollTop = nextTop;
+      scrollTop = nextTop;
+    }
+  });
 </script>
 
-<div class="relative overflow-y-auto" style:height="{height}px" onscroll={onScroll}>
+<div bind:this={viewport} class="relative overflow-y-auto" style:height="{height}px" onscroll={onScroll}>
   <div class="relative w-full" style:height="{totalHeight}px">
     <div class="absolute start-0 top-0 w-full" style:transform="translateY({offsetY}px)">
       {#each visibleItems as item, i (startIndex + i)}
