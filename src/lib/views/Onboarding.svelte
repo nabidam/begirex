@@ -1,13 +1,21 @@
 <script lang="ts">
   // S1 — First-run Onboarding, full wizard (UX.md S1, TASKS.md T17,
-  // replacing T4's minimal blocking version). Region 1: engine check, one
-  // BinaryRow per binary with found/downloading/error states. Region 2:
-  // optional global proxy. Continue is gated on both binaries resolved;
-  // "I'll set it later" is the degraded-mode escape hatch (AC2) — App.svelte
-  // lands on S2 without requiring bothFound.
+  // replacing T4's minimal blocking version; migrated to shadcn/lucide at
+  // T28). Region 1: engine check, one BinaryRow per binary with
+  // found/downloading/error states. Region 2: optional global proxy.
+  // Continue is gated on both binaries resolved; "I'll set it later" is the
+  // degraded-mode escape hatch (AC2) — App.svelte lands on S2 without
+  // requiring bothFound. The whole wizard is one shadcn `card` (T28 AC1),
+  // same single-box layout T17 shipped, now composed of real Card
+  // sub-parts instead of one hand-rolled bordered div.
   import { settingsStore } from "../stores/settings.svelte";
   import { pickBinaryPath } from "../ipc";
   import BinaryRow from "../components/BinaryRow.svelte";
+  import * as Card from "$lib/components/ui/card";
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import * as Alert from "$lib/components/ui/alert";
+  import CircleCheck from "lucide-svelte/icons/circle-check";
 
   let { onContinue, onSkip }: { onContinue: () => void; onSkip: () => void } = $props();
 
@@ -42,147 +50,60 @@
   }
 </script>
 
-<main class="onboarding">
-  <header>
-    <h1>BegireX · First-time setup</h1>
-  </header>
+<main class="mx-auto my-12 w-full max-w-[34rem] p-4">
+  <Card.Root>
+    <Card.Header>
+      <Card.Title class="text-[1.1em]">BegireX · First-time setup</Card.Title>
+    </Card.Header>
 
-  {#if settingsStore.error}
-    <p class="error">{settingsStore.error}</p>
-  {/if}
+    <Card.Content class="flex flex-col gap-5">
+      {#if settingsStore.error}
+        <Alert.Root class="border-[var(--error-token)]">
+          <Alert.Description class="text-[var(--error-token)]">{settingsStore.error}</Alert.Description>
+        </Alert.Root>
+      {/if}
 
-  <section class="region">
-    <h2>Engine check</h2>
-    {#if settingsStore.settings?.build_flavor === "bundled"}
-      <!-- UX.md S1 density note: the bundled build skips detection entirely
-           (ARCHITECTURE §9 seeds ytdlp_path/ffmpeg_path to its shipped
-           binaries) — this screen only fully appears for the light build. -->
-      <p class="bundled-line">Engine bundled ✓</p>
-    {:else}
-      <div class="rows">
-        {#each BINARIES as [which, label] (which)}
-          <BinaryRow
-            {label}
-            status={settingsStore.binaries?.[which]}
-            onSetPath={() => setPath(which)}
-            onDownload={() => settingsStore.downloadBinary(which)}
-            downloadState={settingsStore.downloads[which]}
-          />
-        {/each}
-      </div>
-    {/if}
-  </section>
+      <section class="flex flex-col gap-2.5">
+        <h2 class="m-0 text-[0.9em] tracking-wide text-muted-foreground uppercase">Engine check</h2>
+        {#if settingsStore.settings?.build_flavor === "bundled"}
+          <!-- UX.md S1 density note: the bundled build skips detection entirely
+               (ARCHITECTURE §9 seeds ytdlp_path/ffmpeg_path to its shipped
+               binaries) — this screen only fully appears for the light build. -->
+          <p class="m-0 flex items-center gap-1.5 font-mono text-primary">
+            <CircleCheck aria-hidden="true" class="size-4" />
+            Engine bundled
+          </p>
+        {:else}
+          <div class="flex flex-col gap-2.5">
+            {#each BINARIES as [which, label] (which)}
+              <BinaryRow
+                {label}
+                status={settingsStore.binaries?.[which]}
+                onSetPath={() => setPath(which)}
+                onDownload={() => settingsStore.downloadBinary(which)}
+                downloadState={settingsStore.downloads[which]}
+              />
+            {/each}
+          </div>
+        {/if}
+      </section>
 
-  <section class="region">
-    <h2>Network <span class="optional">(optional)</span></h2>
-    <label class="proxy-field">
-      <span>Proxy</span>
-      <input type="text" bind:value={proxy} placeholder="socks5://user:pass@host:port" />
-    </label>
-  </section>
+      <section class="flex flex-col gap-2.5">
+        <h2 class="m-0 text-[0.9em] tracking-wide text-muted-foreground uppercase">
+          Network <span class="font-normal tracking-normal normal-case">(optional)</span>
+        </h2>
+        <label class="flex flex-col gap-1">
+          <span class="text-[0.85em] text-muted-foreground">Proxy</span>
+          <Input type="text" bind:value={proxy} placeholder="socks5://user:pass@host:port" />
+        </label>
+      </section>
+    </Card.Content>
 
-  <footer>
-    <button type="button" class="ghost" onclick={onSkip}>I'll set it later</button>
-    <button type="button" class="primary" disabled={!bothFound || continuing} onclick={continueClick}>
-      {continuing ? "Continuing…" : "Continue"}
-    </button>
-  </footer>
+    <Card.Footer class="justify-end gap-3">
+      <Button type="button" variant="ghost" onclick={onSkip}>I'll set it later</Button>
+      <Button type="button" disabled={!bothFound || continuing} onclick={continueClick}>
+        {continuing ? "Continuing…" : "Continue"}
+      </Button>
+    </Card.Footer>
+  </Card.Root>
 </main>
-
-<style>
-  .onboarding {
-    max-width: 34rem;
-    margin: 3rem auto;
-    padding: 1.5rem;
-    display: flex;
-    flex-direction: column;
-    gap: 1.25rem;
-    background: var(--card);
-    color: var(--card-foreground);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-  }
-  header h1 {
-    margin: 0;
-    font-size: 1.1em;
-  }
-  .region {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-  }
-  .region h2 {
-    margin: 0;
-    font-size: 0.9em;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-    color: var(--muted-foreground);
-  }
-  .optional {
-    text-transform: none;
-    letter-spacing: normal;
-    font-weight: 400;
-  }
-  .rows {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-  }
-  .bundled-line {
-    margin: 0;
-    color: var(--primary);
-    font-family: var(--font-mono);
-  }
-  .proxy-field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-  input {
-    background: var(--input);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 0.4rem 0.6rem;
-    font-family: var(--font-sans);
-  }
-  input:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 2px;
-  }
-  footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.75rem;
-  }
-  button {
-    background: var(--input);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 0.5rem 0.9rem;
-    font-family: var(--font-sans);
-    cursor: pointer;
-  }
-  button.ghost {
-    background: transparent;
-  }
-  button.primary {
-    background: var(--primary);
-    color: var(--primary-foreground);
-    border-color: var(--primary);
-    font-weight: 700;
-  }
-  button:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 2px;
-  }
-  button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  .error {
-    color: var(--error-token);
-    margin: 0;
-  }
-</style>
