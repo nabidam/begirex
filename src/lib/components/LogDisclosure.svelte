@@ -1,14 +1,16 @@
 <script lang="ts">
-  // LogDisclosure (UX.md S5 region 3, DESIGN.md §3 gap "collapsible") — the
-  // buried yt-dlp stdout/stderr tail. Collapsed by default to keep the
-  // drawer scannable; auto-expands for an errored item so the failing tail
-  // is the first thing a debugging user sees (K3-AC6/K5-AC4).
-  // ponytail: hand-rolled disclosure, same no-shadcn-pipeline precedent as
-  // every prior task (AddDownload.svelte's "Advanced" toggle) — no
-  // `collapsible` dep added.
+  // LogDisclosure (UX.md S5 region 3, DESIGN.md §3 gap "collapsible",
+  // migrated to shadcn `Collapsible` at T26) — the buried yt-dlp
+  // stdout/stderr tail. Collapsed by default to keep the drawer scannable;
+  // auto-expands for an errored item so the failing tail is the first
+  // thing a debugging user sees (K3-AC6/K5-AC4).
   import { onMount } from "svelte";
   import { getItemLog, onLogLine, watchLog } from "../ipc";
   import type { LogLine } from "../types";
+  import * as Collapsible from "$lib/components/ui/collapsible";
+  import { Button } from "$lib/components/ui/button";
+  import { cn } from "$lib/utils";
+  import ChevronRight from "lucide-svelte/icons/chevron-right";
 
   let { itemId, stage }: { itemId: number; stage: string } = $props();
 
@@ -66,69 +68,37 @@
   });
 </script>
 
-<div class="disclosure">
-  <button
-    type="button"
-    class="toggle"
-    aria-expanded={open}
-    onclick={() => (open = !open)}
-  >
-    {open ? "▾" : "▸"} Log (yt-dlp stdout/stderr, tailing)
-  </button>
-  {#if open}
-    <div class="log mono" bind:this={logEl} role="log">
+<Collapsible.Root bind:open class="flex flex-col gap-[0.4rem]">
+  <Collapsible.Trigger>
+    {#snippet child({ props })}
+      <Button
+        {...props}
+        type="button"
+        variant="ghost"
+        size="sm"
+        class="w-fit gap-1 self-start px-0 text-muted-foreground hover:bg-transparent"
+        aria-expanded={open}
+      >
+        <ChevronRight aria-hidden="true" class={cn("size-3.5 transition-transform", open && "rotate-90")} />
+        Log (yt-dlp stdout/stderr, tailing)
+      </Button>
+    {/snippet}
+  </Collapsible.Trigger>
+  <Collapsible.Content>
+    <div
+      class="max-h-48 overflow-y-auto rounded-lg border border-border bg-muted p-2.5 font-mono text-[0.78em]"
+      bind:this={logEl}
+      role="log"
+    >
       {#if lines.length === 0}
-        <p class="empty">No output yet.</p>
+        <p class="m-0 text-muted-foreground">No output yet.</p>
       {:else}
         {#each lines as l, i (i)}
-          <p class="line" class:stderr={l.stream === "stderr"}>{l.line}</p>
+          <p class={cn("m-0 whitespace-pre-wrap text-foreground", l.stream === "stderr" && "text-[var(--error-token)]")}>
+            {l.line}
+          </p>
         {/each}
       {/if}
     </div>
-  {/if}
-</div>
-
-<style>
-  .disclosure {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-  .toggle {
-    align-self: flex-start;
-    background: transparent;
-    border: none;
-    color: var(--muted-foreground);
-    padding: 0;
-    font-size: 0.85em;
-    cursor: pointer;
-  }
-  .toggle:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 2px;
-  }
-  .log {
-    max-height: 12rem;
-    overflow-y: auto;
-    background: var(--muted);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 0.5rem 0.6rem;
-    font-size: 0.78em;
-  }
-  .mono {
-    font-family: var(--font-mono);
-  }
-  .line {
-    margin: 0;
-    white-space: pre-wrap;
-    color: var(--foreground);
-  }
-  .line.stderr {
-    color: var(--error-token);
-  }
-  .empty {
-    margin: 0;
-    color: var(--muted-foreground);
-  }
-</style>
+  </Collapsible.Content>
+</Collapsible.Root>

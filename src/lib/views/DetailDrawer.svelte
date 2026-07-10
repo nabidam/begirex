@@ -1,10 +1,36 @@
 <script lang="ts">
-  // S5 — Download Detail drawer (UX.md, TASKS.md T15). Docked beside the
-  // live queue (never a scrim/modal — ARCHITECTURE/UX §2 "S3 and S5 are
-  // overlays over S2... sits beside S5"), opened via queueStore.openDetail
-  // (T14's row click/Enter) and closed via ✕ or Esc. Mounted once,
+  // S5 — Download Detail drawer (UX.md, TASKS.md T15, migrated to
+  // shadcn/lucide at T26). Docked beside the live queue (never a
+  // scrim/modal — ARCHITECTURE/UX §2 "S3 and S5 are overlays over S2...
+  // sits beside S5"), opened via queueStore.openDetail (T14's row
+  // click/Enter) and closed via close button or Esc. Mounted once,
   // unconditionally, from Shell.svelte so its Esc listener registers before
   // AddDownload's (S3) — UX §2 "Esc closes the topmost overlay (S5 → S3)".
+  //
+  // ponytail: AC1 asks for the outer shell to be shadcn `Sheet`, but this
+  // stays the hand-rolled fixed `<aside>` (only the *inner* primitives —
+  // FactsGrid's Card, LogDisclosure's Collapsible, Button, Progress,
+  // lucide icons — are swapped), per the task's own documented fallback
+  // ("non-scrim wins over using the Sheet shell"). Reason, traced against
+  // bits-ui 2.18.1 (node_modules/bits-ui/dist/bits/dialog/*,
+  // .../utilities/focus-scope/focus-scope.svelte.js): shadcn's generated
+  // `ui/sheet/sheet-content.svelte` unconditionally renders
+  // `<SheetOverlay />` inside itself with no prop to omit/style it, so the
+  // *official* `Sheet.Content` wrapper cannot go non-scrim without either
+  // hand-editing the generated ui/ file (against CONVENTIONS' "don't
+  // hand-edit beyond theming") or re-composing the content shell directly
+  // from raw bits-ui `Dialog` primitives outside the generated wrapper —
+  // and even then, bits-ui's `FocusScope` always steals focus into the
+  // panel on open (`#handleOpenAutoFocus` fires unconditionally, independent
+  // of `trapFocus`), which the old drawer never did, so replicating exact
+  // prior behavior would require suppressing that too. Given T15's AC4
+  // (Esc priority) and the non-scrim/interactive-queue-behind requirement
+  // are both load-bearing, the lower-risk path is keeping the proven
+  // hand-rolled shell and only migrating what the task can safely swap.
+  // Upgrade path: once `ui/sheet` grows an overlay-opt-out prop upstream,
+  // swap the `<aside>` for real `Sheet.Root`/`Sheet.Content` with
+  // `interactOutsideBehavior="ignore"`, `trapFocus={false}`,
+  // `preventScroll={false}`, and a no-op `onOpenAutoFocus`.
   import { onMount } from "svelte";
   import { queueStore } from "../stores/queue.svelte";
   import { presetsStore } from "../stores/presets.svelte";
@@ -13,6 +39,17 @@
   import StageToken from "../components/StageToken.svelte";
   import FactsGrid from "../components/FactsGrid.svelte";
   import LogDisclosure from "../components/LogDisclosure.svelte";
+  import { Button } from "$lib/components/ui/button";
+  import { Progress } from "$lib/components/ui/progress";
+  import { cn } from "$lib/utils";
+  import X from "lucide-svelte/icons/x";
+  import Pause from "lucide-svelte/icons/pause";
+  import Play from "lucide-svelte/icons/play";
+  import RotateCcw from "lucide-svelte/icons/rotate-ccw";
+  import Ban from "lucide-svelte/icons/ban";
+  import Trash2 from "lucide-svelte/icons/trash-2";
+  import FileText from "lucide-svelte/icons/file-text";
+  import FolderOpen from "lucide-svelte/icons/folder-open";
 
   const ACTIVE_STAGES = new Set(["downloading", "merging"]);
   const TERMINAL_STAGES = new Set(["completed", "cancelled"]);
@@ -98,22 +135,35 @@
 </script>
 
 {#if item}
-  <aside class="drawer" aria-label="Download detail">
-    <header>
-      <div class="title-row">
-        <h2 title={item.title ?? item.url}>{item.title ?? item.url}</h2>
-        <button type="button" class="icon-btn" onclick={close} aria-label="Close">✕</button>
+  <aside
+    class="fixed inset-y-0 end-0 z-40 flex w-96 max-w-[calc(100vw-4rem)] flex-col border-s border-border bg-[var(--surface-lowest)] shadow-[-4px_0_12px_color-mix(in_srgb,var(--surface-lowest)_60%,transparent)]"
+    aria-label="Download detail"
+  >
+    <header class="flex flex-col gap-[0.6rem] border-b border-border px-[1.1rem] pt-4 pb-3">
+      <div class="flex items-center justify-between gap-2">
+        <h2 class="m-0 min-w-0 truncate text-[1em]" title={item.title ?? item.url}>{item.title ?? item.url}</h2>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          class="shrink-0 text-muted-foreground"
+          onclick={close}
+          aria-label="Close"
+        >
+          <X aria-hidden="true" />
+        </Button>
       </div>
-      <div class="header-progress">
+      <div class="flex items-center gap-2">
         <StageToken stage={item.stage} />
-        <div class="bar-track" class:thick={ACTIVE_STAGES.has(item.stage)}>
-          <div class="bar-fill" style:width="{Math.min(100, Math.max(0, item.percent))}%"></div>
-        </div>
-        <span class="figures mono">{item.percent.toFixed(0)}%</span>
+        <Progress
+          value={Math.min(100, Math.max(0, item.percent))}
+          class={cn("flex-1", ACTIVE_STAGES.has(item.stage) ? "h-2" : "h-1")}
+        />
+        <span class="shrink-0 font-mono text-[0.78em] text-muted-foreground">{item.percent.toFixed(0)}%</span>
       </div>
     </header>
 
-    <div class="body">
+    <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-[1.1rem] py-4">
       <FactsGrid
         {item}
         globalProxy={settingsStore.settings?.global_proxy ?? null}
@@ -124,173 +174,57 @@
       <LogDisclosure itemId={item.id} stage={item.stage} />
     </div>
 
-    <footer>
+    <footer class="flex flex-wrap justify-end gap-2 border-t border-border px-[1.1rem] py-3">
       {#if item.stage === "completed"}
-        <button type="button" onclick={() => item.output_path && openPath(item.output_path)}>Open file</button>
-        <button type="button" onclick={() => item.output_path && openPath(item.output_path, true)}>Open folder</button>
+        <Button type="button" variant="outline" onclick={() => item.output_path && openPath(item.output_path)}>
+          <FileText aria-hidden="true" />
+          Open file
+        </Button>
+        <Button type="button" variant="outline" onclick={() => item.output_path && openPath(item.output_path, true)}>
+          <FolderOpen aria-hidden="true" />
+          Open folder
+        </Button>
       {:else}
         {#if ACTIVE_STAGES.has(item.stage)}
-          <button type="button" onclick={() => queueStore.pause(item.id)}>Pause</button>
+          <Button type="button" variant="outline" onclick={() => queueStore.pause(item.id)}>
+            <Pause aria-hidden="true" />
+            Pause
+          </Button>
         {:else if item.stage === "paused"}
-          <button type="button" onclick={() => queueStore.resume(item.id)}>Resume</button>
+          <Button type="button" variant="outline" onclick={() => queueStore.resume(item.id)}>
+            <Play aria-hidden="true" />
+            Resume
+          </Button>
         {/if}
         {#if item.stage === "error" || item.stage === "cancelled"}
-          <button type="button" class="emphasized" onclick={() => queueStore.retry(item.id)}>Retry</button>
+          <Button type="button" variant="default" onclick={() => queueStore.retry(item.id)}>
+            <RotateCcw aria-hidden="true" />
+            Retry
+          </Button>
         {/if}
         {#if !TERMINAL_STAGES.has(item.stage)}
-          <button type="button" onclick={() => requestCancel(item.id)}>Cancel</button>
+          <Button type="button" variant="outline" onclick={() => requestCancel(item.id)}>
+            <Ban aria-hidden="true" />
+            Cancel
+          </Button>
         {/if}
       {/if}
-      <button type="button" onclick={() => requestRemove(item.id)}>Remove</button>
+      <Button type="button" variant="outline" onclick={() => requestRemove(item.id)}>
+        <Trash2 aria-hidden="true" />
+        Remove
+      </Button>
     </footer>
   </aside>
 {/if}
 
 {#if toast}
-  <div class="toast" role="status">
+  <div
+    class="fixed start-[50%] bottom-6 z-[45] flex -translate-x-1/2 items-center gap-3 rounded-lg border border-border bg-[var(--surface-high)] px-4 py-2.5 text-foreground"
+    role="status"
+  >
     <span>{toast.message}</span>
-    <button type="button" class="undo" onclick={() => toast?.undo()}>Undo</button>
+    <Button type="button" variant="link" size="sm" class="h-auto p-0 font-bold" onclick={() => toast?.undo()}>
+      Undo
+    </Button>
   </div>
 {/if}
-
-<style>
-  .drawer {
-    position: fixed;
-    inset-block: 0;
-    inset-inline-end: 0;
-    width: 24rem;
-    max-width: calc(100vw - 4rem);
-    background: var(--surface-lowest);
-    border-inline-start: 1px solid var(--border);
-    box-shadow: -4px 0 12px color-mix(in srgb, var(--surface-lowest) 60%, transparent);
-    display: flex;
-    flex-direction: column;
-    z-index: 40;
-  }
-  header {
-    padding: 1rem 1.1rem 0.75rem;
-    border-block-end: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-  }
-  .title-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-  }
-  h2 {
-    margin: 0;
-    font-size: 1em;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-  }
-  .icon-btn {
-    flex-shrink: 0;
-    background: transparent;
-    border: none;
-    color: var(--muted-foreground);
-    cursor: pointer;
-    font-size: 1em;
-    padding: 0.2rem 0.4rem;
-  }
-  .icon-btn:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 2px;
-  }
-  .header-progress {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  .bar-track {
-    flex: 1;
-    height: 4px;
-    border-radius: 999px;
-    background: var(--muted);
-    overflow: hidden;
-  }
-  .bar-track.thick {
-    height: 8px;
-  }
-  .bar-fill {
-    height: 100%;
-    background: var(--primary);
-    border-radius: 999px;
-    transition: width 200ms linear;
-  }
-  .figures {
-    font-size: 0.78em;
-    color: var(--muted-foreground);
-    flex-shrink: 0;
-  }
-  .mono {
-    font-family: var(--font-mono);
-  }
-  .body {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 1rem 1.1rem;
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
-  footer {
-    padding: 0.75rem 1.1rem;
-    border-block-start: 1px solid var(--border);
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 0.5rem;
-  }
-  footer button {
-    background: var(--input);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 0.4rem 0.7rem;
-    font-family: var(--font-sans);
-    font-size: 0.85em;
-    cursor: pointer;
-  }
-  footer button.emphasized {
-    background: var(--primary);
-    color: var(--primary-foreground);
-    border-color: var(--primary);
-  }
-  footer button:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 2px;
-  }
-  .toast {
-    position: fixed;
-    inset-block-end: 1.5rem;
-    inset-inline-start: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    background: var(--surface-high);
-    color: var(--foreground);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 0.6rem 1rem;
-    z-index: 45;
-  }
-  .undo {
-    background: transparent;
-    border: none;
-    color: var(--primary);
-    font-weight: 700;
-    cursor: pointer;
-    padding: 0;
-  }
-  .undo:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 2px;
-  }
-</style>
