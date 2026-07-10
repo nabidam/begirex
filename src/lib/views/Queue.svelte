@@ -14,6 +14,10 @@
   import { Button } from "$lib/components/ui/button";
   import * as AlertDialog from "$lib/components/ui/alert-dialog";
   import { toast } from "svelte-sonner";
+  import CircleAlert from "lucide-svelte/icons/circle-alert";
+  import Link2 from "lucide-svelte/icons/link-2";
+  import SearchX from "lucide-svelte/icons/search-x";
+  import Wrench from "lucide-svelte/icons/wrench";
 
   let {
     items,
@@ -260,9 +264,13 @@
 
 <main class="flex min-h-0 flex-1 flex-col">
   {#if queueStore.error}
-    <p class="px-4 py-2 text-[var(--error-token)]" role="alert">
-      Queue action needs attention: {queueStore.error} Check the affected download, then try again.
-    </p>
+    <div class="mx-4 mt-3 flex items-start gap-2.5 rounded-lg border border-[var(--error-token)] bg-destructive px-3 py-2.5 text-destructive-foreground" role="alert">
+      <CircleAlert aria-hidden="true" class="mt-0.5 size-4 shrink-0" />
+      <p class="m-0 text-sm">
+        <span class="font-semibold">Queue action needs attention.</span>
+        {queueStore.error} Check the affected download, then try again.
+      </p>
+    </div>
   {/if}
 
   <SelectionBar
@@ -284,7 +292,7 @@
 
   {#if visible.length > 0}
     <div
-      class="grid grid-cols-[2rem_minmax(6rem,1fr)_4.5rem_minmax(12rem,2fr)_3.5rem_2.5rem] gap-3 px-[1.6rem] text-xs tracking-wide text-muted-foreground uppercase"
+      class="grid grid-cols-[2rem_minmax(6rem,1fr)_4.5rem_minmax(12rem,2fr)_3.5rem_2.5rem] gap-3 border-b border-border bg-[var(--surface-lowest)] px-[1.6rem] py-2 font-mono text-xs tracking-wide text-muted-foreground uppercase"
     >
       <span></span>
       <span>Title</span>
@@ -298,20 +306,32 @@
   <div class="min-h-0 flex-1 px-4 py-2" bind:clientHeight={listHeight}>
     {#if visible.length === 0}
       {#if addDisabled}
-        <p class="px-4 py-8 text-center text-muted-foreground">
-          Downloads are unavailable until yt-dlp and ffmpeg are ready. Open Settings to finish setup.
-        </p>
+        <div class="mx-auto mt-8 flex max-w-xl items-start gap-3 rounded-lg border border-[var(--warning)] bg-[color-mix(in_srgb,var(--warning)_12%,var(--muted))] px-4 py-3 text-[var(--warning)]" role="status">
+          <Wrench aria-hidden="true" class="mt-0.5 size-4 shrink-0" />
+          <p class="m-0 text-sm">
+            <span class="font-semibold">Downloads are unavailable.</span>
+            yt-dlp and ffmpeg must be ready before you can add a download. Open Settings to finish setup.
+          </p>
+        </div>
       {:else if totalCount === 0}
-        <p class="px-4 py-8 text-center text-muted-foreground">
-          No downloads yet. Paste a link or press
-          <Button type="button" variant="link" class="h-auto p-0 align-baseline" onclick={onAdd}>Add</Button>
-          to start.
-        </p>
+        <div class="mx-auto mt-12 flex max-w-sm flex-col items-center text-center" role="status">
+          <span class="mb-3 grid size-9 place-items-center rounded-lg bg-primary text-primary-foreground">
+            <Link2 aria-hidden="true" class="size-4" />
+          </span>
+          <p class="m-0 text-sm text-muted-foreground">
+            No downloads yet. Paste a link or press
+            <Button type="button" variant="link" class="h-auto p-0 align-baseline" onclick={onAdd}>Add</Button>
+            to start.
+          </p>
+        </div>
       {:else}
-        <p class="px-4 py-8 text-center text-muted-foreground">
-          No downloads match the current filter or search.
-          <Button type="button" variant="link" class="h-auto p-0 align-baseline" onclick={onShowAll}>Show all</Button>
-        </p>
+        <div class="mx-auto mt-12 flex max-w-sm flex-col items-center text-center" role="status">
+          <SearchX aria-hidden="true" class="mb-3 size-5 text-muted-foreground" />
+          <p class="m-0 text-sm text-muted-foreground">
+            No downloads match the current filter or search.
+            <Button type="button" variant="link" class="h-auto p-0 align-baseline" onclick={onShowAll}>Show all</Button>
+          </p>
+        </div>
       {/if}
     {:else}
       <VirtualList items={visible} itemHeight={ROW_HEIGHT} height={listHeight} {focusedIndex}>
