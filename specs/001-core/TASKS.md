@@ -387,6 +387,7 @@ Requirement ids (K/V/NFR/AC) → PRD.md; screen ids (S1–S7) → UX.md; command
 
 ### T21 — 🚦 DEMO GATE 5 — v1 exit
 
+- **Status:** ⏭️ GATE SKIPPED — user deferred the v1-exit walkthrough because contract conflicts (the hand-rolled-frontend violations catalogued in Milestone 6) were found; the walk would fail its own "every screen visibly using the committed stack" spirit until remediation (T22–T28) lands. Re-fold this exit bar into the T29 remediation gate walkthrough (kernel journey + one playlist + duplicate-URL warn + delete-default-preset promotion + kill-9 durability + keyboard-only + WCAG AA, both flavors/OSes). Visible debt — do not close the cycle without walking it.
 - **Objective:** the 001-core exit bar across both flavors and OSes where hardware allows.
 - **Dependencies:** T20.
 - **Journey to walk:** kernel journey + one playlist + duplicate-URL warn + delete-default-preset promotion + `kill -9` durability + keyboard-only pass + WCAG AA spot-check, on both flavors and both OSes.
