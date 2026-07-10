@@ -2,14 +2,26 @@
   // Sidebar (UX.md S2, DESIGN.md gap #5) — + Add CTA, the status filter tree
   // (live count badges), Presets/Settings pinned bottom. Collapses to a
   // ~56px icon rail below ~1100px window width or by manual toggle
-  // (DESIGN.md §6). No shadcn `tooltip` component exists in this repo (no
-  // shadcn/Tailwind pipeline, per T10/T11's precedent) — collapsed labels
-  // fall back to the native `title` attribute.
-  // ponytail: unicode glyphs stand in for lucide-svelte icons (not
-  // installed, same no-new-dependency precedent as every prior task).
-  // Upgrade path: swap for `lucide-svelte` if/when the icon set grows.
+  // (DESIGN.md §6). Collapsed-rail labels are shadcn `tooltip` (T23,
+  // replacing the T13 `title`-attr ponytail); each row's `Tooltip.Root` is
+  // simply `disabled` while expanded so the same markup serves both states.
   import { filtersStore, STATUS_FILTERS, type StatusFilter } from "../stores/filters.svelte";
   import type { Item } from "../types";
+  import { Button } from "$lib/components/ui/button";
+  import { Badge } from "$lib/components/ui/badge";
+  import * as Tooltip from "$lib/components/ui/tooltip";
+  import { cn } from "$lib/utils";
+  import ChevronsLeft from "lucide-svelte/icons/chevrons-left";
+  import ChevronsRight from "lucide-svelte/icons/chevrons-right";
+  import Plus from "lucide-svelte/icons/plus";
+  import List from "lucide-svelte/icons/list";
+  import Download from "lucide-svelte/icons/download";
+  import Clock from "lucide-svelte/icons/clock";
+  import CirclePause from "lucide-svelte/icons/circle-pause";
+  import CircleCheck from "lucide-svelte/icons/circle-check";
+  import CircleAlert from "lucide-svelte/icons/circle-alert";
+  import Package from "lucide-svelte/icons/package";
+  import SettingsIcon from "lucide-svelte/icons/settings";
 
   let { items, onAdd, onOpenPresets, onOpenSettings, collapsed, addDisabled = false }: {
     items: Item[];
@@ -20,13 +32,13 @@
     addDisabled?: boolean;
   } = $props();
 
-  const ICON: Record<StatusFilter, string> = {
-    all: "◈",
-    downloading: "↓",
-    queued: "‖",
-    paused: "⏸",
-    completed: "✓",
-    failed: "⚠",
+  const ICON: Record<StatusFilter, typeof List> = {
+    all: List,
+    downloading: Download,
+    queued: Clock,
+    paused: CirclePause,
+    completed: CircleCheck,
+    failed: CircleAlert,
   };
 
   const LABEL: Record<StatusFilter, string> = {
@@ -39,169 +51,130 @@
   };
 </script>
 
-<nav class="sidebar" class:collapsed aria-label="Queue navigation">
-  <button
-    type="button"
-    class="collapse-toggle"
-    onclick={() => filtersStore.toggleCollapsed()}
-    aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-    title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+<Tooltip.Provider>
+  <nav
+    class={cn(
+      "flex flex-col gap-3 overflow-y-auto border-e border-border bg-card p-3 text-card-foreground",
+      collapsed ? "w-14 items-center px-1.5" : "w-60",
+    )}
+    aria-label="Queue navigation"
   >
-    <span class="glyph" aria-hidden="true">{collapsed ? "»" : "«"}</span>
-  </button>
+    <Tooltip.Root disabled={!collapsed}>
+      <Tooltip.Trigger>
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            type="button"
+            variant="ghost"
+            class="w-full justify-center text-muted-foreground"
+            onclick={() => filtersStore.toggleCollapsed()}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {#if collapsed}
+              <ChevronsRight aria-hidden="true" />
+            {:else}
+              <ChevronsLeft aria-hidden="true" />
+            {/if}
+          </Button>
+        {/snippet}
+      </Tooltip.Trigger>
+      <Tooltip.Content side="right">{collapsed ? "Expand sidebar" : "Collapse sidebar"}</Tooltip.Content>
+    </Tooltip.Root>
 
-  <button
-    type="button"
-    class="add-btn"
-    onclick={onAdd}
-    disabled={addDisabled}
-    title={addDisabled
-      ? "Set up yt-dlp/ffmpeg in Settings to enable downloads."
-      : collapsed
-        ? "Add"
-        : undefined}
-  >
-    <span class="glyph" aria-hidden="true">＋</span>
-    {#if !collapsed}<span>Add</span>{/if}
-  </button>
+    <Tooltip.Root disabled={!collapsed}>
+      <Tooltip.Trigger>
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            type="button"
+            variant="default"
+            class="w-full justify-center gap-2 font-bold"
+            onclick={onAdd}
+            disabled={addDisabled}
+          >
+            <Plus aria-hidden="true" />
+            {#if !collapsed}<span>Add</span>{/if}
+          </Button>
+        {/snippet}
+      </Tooltip.Trigger>
+      <Tooltip.Content side="right">
+        {addDisabled ? "Set up yt-dlp/ffmpeg in Settings to enable downloads." : "Add"}
+      </Tooltip.Content>
+    </Tooltip.Root>
 
-  <ul class="filter-tree">
-    {#each STATUS_FILTERS as filter (filter)}
-      {@const count = filtersStore.countFor(filter, items)}
-      {@const active = filtersStore.status === filter}
-      <li>
-        <button
-          type="button"
-          class="filter-row"
-          class:active
-          onclick={() => filtersStore.setStatus(filter)}
-          title={collapsed ? LABEL[filter] : undefined}
-          aria-current={active ? "true" : undefined}
-        >
-          <span class="glyph" aria-hidden="true">{ICON[filter]}</span>
-          {#if !collapsed}<span class="label">{LABEL[filter]}</span>{/if}
-          <span class="count">{count}</span>
-        </button>
-      </li>
-    {/each}
-  </ul>
+    <ul class="m-0 flex w-full list-none flex-col gap-0.5 p-0">
+      {#each STATUS_FILTERS as filter (filter)}
+        {@const count = filtersStore.countFor(filter, items)}
+        {@const active = filtersStore.status === filter}
+        {@const Icon = ICON[filter]}
+        <li>
+          <Tooltip.Root disabled={!collapsed}>
+            <Tooltip.Trigger>
+              {#snippet child({ props })}
+                <Button
+                  {...props}
+                  type="button"
+                  variant="ghost"
+                  class={cn(
+                    "w-full border-s-2",
+                    active ? "border-s-primary bg-accent font-bold" : "border-s-transparent",
+                    collapsed ? "justify-center px-0" : "justify-start gap-2",
+                  )}
+                  onclick={() => filtersStore.setStatus(filter)}
+                  aria-current={active ? "true" : undefined}
+                >
+                  <Icon aria-hidden="true" />
+                  {#if !collapsed}<span class="flex-1 text-start">{LABEL[filter]}</span>{/if}
+                  {#if !collapsed}
+                    <Badge variant="secondary" class="font-mono">{count}</Badge>
+                  {/if}
+                </Button>
+              {/snippet}
+            </Tooltip.Trigger>
+            <Tooltip.Content side="right">{LABEL[filter]}</Tooltip.Content>
+          </Tooltip.Root>
+        </li>
+      {/each}
+    </ul>
 
-  <div class="pinned">
-    <button type="button" class="pinned-row" onclick={onOpenPresets} title={collapsed ? "Presets" : undefined}>
-      <span class="glyph" aria-hidden="true">⛃</span>
-      {#if !collapsed}<span>Presets</span>{/if}
-    </button>
-    <button
-      type="button"
-      class="pinned-row"
-      onclick={onOpenSettings}
-      title={collapsed ? "Settings (Ctrl/Cmd+,)" : "Settings (Ctrl/Cmd+,)"}
-    >
-      <span class="glyph" aria-hidden="true">⚙</span>
-      {#if !collapsed}<span>Settings</span>{/if}
-    </button>
-  </div>
-</nav>
+    <div class="mt-auto flex w-full flex-col gap-0.5">
+      <Tooltip.Root disabled={!collapsed}>
+        <Tooltip.Trigger>
+          {#snippet child({ props })}
+            <Button
+              {...props}
+              type="button"
+              variant="ghost"
+              class={cn("w-full", collapsed ? "justify-center" : "justify-start gap-2")}
+              onclick={onOpenPresets}
+            >
+              <Package aria-hidden="true" />
+              {#if !collapsed}<span>Presets</span>{/if}
+            </Button>
+          {/snippet}
+        </Tooltip.Trigger>
+        <Tooltip.Content side="right">Presets</Tooltip.Content>
+      </Tooltip.Root>
 
-<style>
-  .sidebar {
-    width: 240px;
-    flex: 0 0 auto;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    padding: 0.75rem;
-    background: var(--card);
-    color: var(--card-foreground);
-    border-inline-end: 1px solid var(--border);
-    overflow-y: auto;
-  }
-  .sidebar.collapsed {
-    width: 56px;
-    padding-inline: 0.4rem;
-    align-items: center;
-  }
-  button {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    width: 100%;
-    background: transparent;
-    color: inherit;
-    border: 1px solid transparent;
-    border-radius: var(--radius);
-    padding: 0.4rem 0.6rem;
-    font-family: var(--font-sans);
-    font-size: 0.9em;
-    cursor: pointer;
-    text-align: start;
-  }
-  .collapsed button {
-    justify-content: center;
-    padding: 0.5rem;
-  }
-  button:hover {
-    background: var(--accent);
-  }
-  button:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 2px;
-  }
-  button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  .add-btn {
-    background: var(--primary);
-    color: var(--primary-foreground);
-    font-weight: 700;
-    justify-content: center;
-  }
-  .collapse-toggle {
-    justify-content: center;
-    color: var(--muted-foreground);
-  }
-  .glyph {
-    width: 1.2em;
-    text-align: center;
-    font-family: var(--font-mono);
-  }
-  .filter-tree {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
-  }
-  .filter-row {
-    border-inline-start: 2px solid transparent;
-  }
-  .filter-row.active {
-    font-weight: 700;
-    border-inline-start-color: var(--primary);
-    background: var(--accent);
-  }
-  .label {
-    flex: 1;
-  }
-  .count {
-    font-family: var(--font-mono);
-    font-size: 0.85em;
-    color: var(--muted-foreground);
-    background: var(--muted);
-    border-radius: 999px;
-    padding: 0 0.4rem;
-    min-width: 1.4em;
-    text-align: center;
-  }
-  .collapsed .count {
-    display: none;
-  }
-  .pinned {
-    margin-block-start: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
-  }
-</style>
+      <!-- Settings' hover hint always names the shortcut, in both rail
+           states — matches the pre-migration `title` behavior verbatim. -->
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          {#snippet child({ props })}
+            <Button
+              {...props}
+              type="button"
+              variant="ghost"
+              class={cn("w-full", collapsed ? "justify-center" : "justify-start gap-2")}
+              onclick={onOpenSettings}
+            >
+              <SettingsIcon aria-hidden="true" />
+              {#if !collapsed}<span>Settings</span>{/if}
+            </Button>
+          {/snippet}
+        </Tooltip.Trigger>
+        <Tooltip.Content side="right">Settings (Ctrl/Cmd+,)</Tooltip.Content>
+      </Tooltip.Root>
+    </div>
+  </nav>
+</Tooltip.Provider>

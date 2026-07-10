@@ -16,6 +16,8 @@
   import AddDownload from "./AddDownload.svelte";
   import Presets from "./Presets.svelte";
   import Settings from "./Settings.svelte";
+  import { Button } from "$lib/components/ui/button";
+  import X from "lucide-svelte/icons/x";
 
   let { onReRunOnboarding }: { onReRunOnboarding: () => void } = $props();
 
@@ -63,7 +65,7 @@
 
 <svelte:window bind:innerWidth />
 
-<div class="shell">
+<div class="flex h-screen overflow-hidden">
   <Sidebar
     items={queueStore.items}
     {collapsed}
@@ -73,7 +75,7 @@
     addDisabled={downloadsDisabled}
   />
 
-  <div class="main">
+  <div class="flex min-w-0 flex-1 flex-col overflow-y-auto">
     <QueueToolbar {visibleItems} />
     <Queue
       items={visibleItems}
@@ -92,11 +94,26 @@
 {#if showPresets}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="scrim" onclick={() => (showPresets = false)}>
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-[color-mix(in_srgb,var(--surface-lowest)_70%,transparent)]"
+    onclick={() => (showPresets = false)}
+  >
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="presets-overlay" onclick={(e) => e.stopPropagation()}>
-      <button type="button" class="icon-btn" onclick={() => (showPresets = false)} aria-label="Close">✕</button>
+    <div
+      class="relative max-h-[calc(100vh-4rem)] overflow-y-auto rounded-lg bg-[var(--surface-lowest)]"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        class="absolute end-3 top-3 z-10 text-muted-foreground"
+        onclick={() => (showPresets = false)}
+        aria-label="Close"
+      >
+        <X aria-hidden="true" />
+      </Button>
       <Presets />
     </div>
   </div>
@@ -105,11 +122,26 @@
 {#if showSettings}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="scrim" onclick={() => (showSettings = false)}>
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-[color-mix(in_srgb,var(--surface-lowest)_70%,transparent)]"
+    onclick={() => (showSettings = false)}
+  >
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="presets-overlay" onclick={(e) => e.stopPropagation()}>
-      <button type="button" class="icon-btn" onclick={() => (showSettings = false)} aria-label="Close">✕</button>
+    <div
+      class="relative max-h-[calc(100vh-4rem)] overflow-y-auto rounded-lg bg-[var(--surface-lowest)]"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        class="absolute end-3 top-3 z-10 text-muted-foreground"
+        onclick={() => (showSettings = false)}
+        aria-label="Close"
+      >
+        <X aria-hidden="true" />
+      </Button>
       <Settings
         onReRunOnboarding={() => {
           showSettings = false;
@@ -119,50 +151,3 @@
     </div>
   </div>
 {/if}
-
-<style>
-  .shell {
-    display: flex;
-    height: 100vh;
-    overflow: hidden;
-  }
-  .main {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    overflow-y: auto;
-  }
-  .scrim {
-    position: fixed;
-    inset: 0;
-    background: color-mix(in srgb, var(--surface-lowest) 70%, transparent);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 50;
-  }
-  .presets-overlay {
-    position: relative;
-    background: var(--surface-lowest);
-    border-radius: var(--radius);
-    max-height: calc(100vh - 4rem);
-    overflow-y: auto;
-  }
-  .icon-btn {
-    position: absolute;
-    top: 0.75rem;
-    inset-inline-end: 0.75rem;
-    background: transparent;
-    border: none;
-    color: var(--muted-foreground);
-    cursor: pointer;
-    font-size: 1em;
-    padding: 0.2rem 0.4rem;
-    z-index: 1;
-  }
-  .icon-btn:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 2px;
-  }
-</style>
