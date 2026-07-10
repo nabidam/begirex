@@ -2,6 +2,9 @@
    Tokens copied verbatim from DESIGN_SYSTEM.md §2, mapped to shadcn-svelte
    CSS variable names per DESIGN.md §2. Dark-only for 001-core walking skeleton. */
 
+@import "tailwindcss";
+@custom-variant dark (&:is(.dark *));
+
 @font-face {
   font-family: "Instrument Sans";
   src: url("./assets/fonts/InstrumentSans-Regular.ttf") format("truetype");
@@ -71,6 +74,38 @@
 
   --font-sans: "Instrument Sans", sans-serif;
   --font-mono: "JetBrains Mono", monospace;
+}
+
+/* Tailwind v4 theme binding — maps shadcn-svelte's expected utility/variable
+   names onto the raw tokens above (DESIGN.md §2). No new values are
+   introduced here; this block only aliases the :root map so bits-ui-driven
+   components (bg-primary, text-muted-foreground, etc.) resolve to it. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 }
 
 * {
