@@ -15,8 +15,6 @@
   import * as AlertDialog from "$lib/components/ui/alert-dialog";
   import { toast } from "svelte-sonner";
   import CircleAlert from "lucide-svelte/icons/circle-alert";
-  import Link2 from "lucide-svelte/icons/link-2";
-  import SearchX from "lucide-svelte/icons/search-x";
   import Wrench from "lucide-svelte/icons/wrench";
 
   let {
@@ -267,8 +265,8 @@
     <div class="mx-4 mt-3 flex items-start gap-2.5 rounded-lg border border-[var(--error-token)] bg-destructive px-3 py-2.5 text-destructive-foreground" role="alert">
       <CircleAlert aria-hidden="true" class="mt-0.5 size-4 shrink-0" />
       <p class="m-0 text-sm">
-        <span class="font-semibold">Queue action needs attention.</span>
-        {queueStore.error} Check the affected download, then try again.
+        <span class="font-semibold">Queue action failed.</span>
+        {queueStore.error}
       </p>
     </div>
   {/if}
@@ -292,14 +290,14 @@
 
   {#if visible.length > 0}
     <div
-      class="grid grid-cols-[2rem_minmax(6rem,1fr)_4.5rem_minmax(12rem,2fr)_3.5rem_2.5rem] gap-3 border-b border-border bg-[var(--surface-lowest)] px-[1.6rem] py-2 font-mono text-xs tracking-wide text-muted-foreground uppercase"
+      class="grid grid-cols-[2rem_minmax(6rem,1fr)_4.5rem_minmax(12rem,2fr)_3.5rem_2.5rem] gap-3 border-b border-border px-[1.6rem] py-2 font-mono text-xs text-muted-foreground"
     >
-      <span></span>
+      <span aria-hidden="true"></span>
       <span>Title</span>
       <span class="text-end">Size</span>
       <span>Status</span>
       <span class="text-end">ETA</span>
-      <span></span>
+      <span aria-hidden="true"></span>
     </div>
   {/if}
 
@@ -310,27 +308,18 @@
           <Wrench aria-hidden="true" class="mt-0.5 size-4 shrink-0" />
           <p class="m-0 text-sm">
             <span class="font-semibold">Downloads are unavailable.</span>
-            yt-dlp and ffmpeg must be ready before you can add a download. Open Settings to finish setup.
+            Finish setting up yt-dlp and ffmpeg in Settings to add downloads.
           </p>
         </div>
       {:else if totalCount === 0}
-        <div class="mx-auto mt-12 flex max-w-sm flex-col items-center text-center" role="status">
-          <span class="mb-3 grid size-9 place-items-center rounded-lg bg-primary text-primary-foreground">
-            <Link2 aria-hidden="true" class="size-4" />
-          </span>
-          <p class="m-0 text-sm text-muted-foreground">
-            No downloads yet. Paste a link or press
-            <Button type="button" variant="link" class="h-auto p-0 align-baseline" onclick={onAdd}>Add</Button>
-            to start.
-          </p>
+        <div class="mx-auto mt-12 flex max-w-sm flex-col items-center gap-3 text-center" role="status">
+          <p class="m-0 text-sm text-muted-foreground">No downloads yet.</p>
+          <Button type="button" size="sm" onclick={onAdd}>Add download</Button>
         </div>
       {:else}
-        <div class="mx-auto mt-12 flex max-w-sm flex-col items-center text-center" role="status">
-          <SearchX aria-hidden="true" class="mb-3 size-5 text-muted-foreground" />
-          <p class="m-0 text-sm text-muted-foreground">
-            No downloads match the current filter or search.
-            <Button type="button" variant="link" class="h-auto p-0 align-baseline" onclick={onShowAll}>Show all</Button>
-          </p>
+        <div class="mx-auto mt-12 flex max-w-sm flex-col items-center gap-3 text-center" role="status">
+          <p class="m-0 text-sm text-muted-foreground">No downloads match this view.</p>
+          <Button type="button" variant="outline" size="sm" onclick={onShowAll}>Show all downloads</Button>
         </div>
       {/if}
     {:else}
