@@ -20,6 +20,7 @@
   import CirclePause from "lucide-svelte/icons/circle-pause";
   import CircleCheck from "lucide-svelte/icons/circle-check";
   import CircleAlert from "lucide-svelte/icons/circle-alert";
+  import CircleX from "lucide-svelte/icons/circle-x";
   import Package from "lucide-svelte/icons/package";
   import SettingsIcon from "lucide-svelte/icons/settings";
 
@@ -39,22 +40,28 @@
     paused: CirclePause,
     completed: CircleCheck,
     failed: CircleAlert,
+    cancelled: CircleX,
   };
 
   const LABEL: Record<StatusFilter, string> = {
     all: "All",
-    downloading: "Downloading",
+    downloading: "Active",
     queued: "Queued",
     paused: "Paused",
     completed: "Completed",
     failed: "Failed",
+    cancelled: "Cancelled",
+  };
+
+  const DESCRIPTION: Partial<Record<StatusFilter, string>> = {
+    downloading: "Downloading or merging",
   };
 </script>
 
 <Tooltip.Provider>
   <nav
     class={cn(
-      "flex flex-col gap-3 overflow-y-auto border-e border-border bg-card p-3 text-card-foreground",
+      "flex min-h-0 flex-col gap-3 overflow-hidden border-e border-border bg-card p-3 text-card-foreground",
       collapsed ? "w-14 items-center px-1.5" : "w-60",
     )}
     aria-label="Queue navigation"
@@ -91,6 +98,8 @@
             class="w-full justify-center gap-2 font-bold"
             onclick={onAdd}
             disabled={addDisabled}
+            aria-label="Add download"
+            aria-describedby={addDisabled ? "download-tools-unavailable" : undefined}
           >
             <Plus aria-hidden="true" />
             {#if !collapsed}<span>Add</span>{/if}
@@ -102,7 +111,35 @@
       </Tooltip.Content>
     </Tooltip.Root>
 
-    <ul class="m-0 flex w-full list-none flex-col gap-0.5 p-0">
+    {#if addDisabled}
+      <div
+        id="download-tools-unavailable"
+        class={cn(
+          "w-full rounded-md bg-muted text-muted-foreground",
+          collapsed ? "flex justify-center p-1" : "space-y-1 px-2 py-2 text-xs leading-4",
+        )}
+      >
+        {#if collapsed}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            class="text-muted-foreground"
+            onclick={onOpenSettings}
+            aria-label="Configure yt-dlp and ffmpeg in Settings"
+          >
+            <SettingsIcon aria-hidden="true" />
+          </Button>
+        {:else}
+          <p>Downloads are unavailable until yt-dlp and ffmpeg are configured.</p>
+          <Button type="button" variant="link" size="xs" class="h-auto px-0" onclick={onOpenSettings}>
+            Open Settings
+          </Button>
+        {/if}
+      </div>
+    {/if}
+
+    <ul class="m-0 flex min-h-0 w-full flex-1 list-none flex-col gap-0.5 overflow-y-auto p-0">
       {#each STATUS_FILTERS as filter (filter)}
         {@const count = filtersStore.countFor(filter, items)}
         {@const active = filtersStore.status === filter}
@@ -116,12 +153,15 @@
                   type="button"
                   variant="ghost"
                   class={cn(
-                    "w-full border-s-2",
-                    active ? "border-s-primary bg-accent font-bold" : "border-s-transparent",
+                    "w-full",
+                    active ? "bg-accent text-accent-foreground font-bold" : "",
                     collapsed ? "justify-center px-0" : "justify-start gap-2",
                   )}
                   onclick={() => filtersStore.setStatus(filter)}
                   aria-current={active ? "true" : undefined}
+                  aria-label={`${LABEL[filter]}, ${count} ${count === 1 ? "download" : "downloads"}${
+                    DESCRIPTION[filter] ? ` — ${DESCRIPTION[filter]}` : ""
+                  }`}
                 >
                   <Icon aria-hidden="true" />
                   {#if !collapsed}<span class="flex-1 text-start">{LABEL[filter]}</span>{/if}
@@ -131,7 +171,7 @@
                 </Button>
               {/snippet}
             </Tooltip.Trigger>
-            <Tooltip.Content side="right">{LABEL[filter]}</Tooltip.Content>
+            <Tooltip.Content side="right">{DESCRIPTION[filter] ?? LABEL[filter]}</Tooltip.Content>
           </Tooltip.Root>
         </li>
       {/each}
@@ -147,6 +187,7 @@
               variant="ghost"
               class={cn("w-full", collapsed ? "justify-center" : "justify-start gap-2")}
               onclick={onOpenPresets}
+              aria-label="Presets"
             >
               <Package aria-hidden="true" />
               {#if !collapsed}<span>Presets</span>{/if}
@@ -156,9 +197,7 @@
         <Tooltip.Content side="right">Presets</Tooltip.Content>
       </Tooltip.Root>
 
-      <!-- Settings' hover hint always names the shortcut, in both rail
-           states — matches the pre-migration `title` behavior verbatim. -->
-      <Tooltip.Root>
+      <Tooltip.Root disabled={!collapsed}>
         <Tooltip.Trigger>
           {#snippet child({ props })}
             <Button
@@ -167,6 +206,7 @@
               variant="ghost"
               class={cn("w-full", collapsed ? "justify-center" : "justify-start gap-2")}
               onclick={onOpenSettings}
+              aria-label="Settings, shortcut Control or Command comma"
             >
               <SettingsIcon aria-hidden="true" />
               {#if !collapsed}<span>Settings</span>{/if}

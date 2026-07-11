@@ -42,8 +42,8 @@ What is deliberately _not_ borrowed: IDM's green accent (we use the purple Mater
         │ + Add ───┼──────┼──► S3 Add Download (overlay) ──► S4 Format
         │          │      │      │            picker (in-panel)     │
         │ ◈ Queue ─┼──────┼──► filters the S2 list in place:        │
-        │   All    │      │      All / Downloading / Queued /        │
-        │   Down…  │      │      Paused / Completed / Failed         │
+        │   All    │      │      All / Active / Queued / Paused /    │
+        │   Active │      │      Completed / Failed / Cancelled      │
         │   Queued │      │      │                                  │
         │   Paused │      │   S2 row click ──► S5 Detail (drawer)    │
         │   Done   │      │                                         │
@@ -120,9 +120,9 @@ Notation: regions listed **top-to-bottom, start-to-end** (LTR/RTL-agnostic — t
 └──────────┴────────────────────────────────────────────────────────────┘
 ```
 
-- **Sidebar** (adapted rail): **+ Add** primary CTA pinned top; **Queue** group is the status filter tree (All / Downloading / Queued / Paused / Completed / Failed), each with a live count badge — this is the IDM category-tree pattern re-pointed at status. **Presets** and **Settings** pinned bottom. Active filter is highlighted (weight + indicator, not color alone).
+- **Sidebar** (adapted rail): **+ Add** primary CTA pinned top; **Queue** group is the status filter tree (All / Active / Queued / Paused / Completed / Failed / Cancelled), each with a live count badge — this is the IDM category-tree pattern re-pointed at status. **Active** covers both `downloading` and `merging` (labelled "Active" rather than "Downloading" so the merge stage isn't orphaned); **Cancelled** is a first-class filter so cancelled items stay recoverable instead of only surfacing under All. **Presets** and **Settings** pinned bottom. Active filter is highlighted (weight + indicator, not color alone).
 - **Toolbar:** search/filter-by-title, the **concurrency N** control (default 2, editable inline), and global **Start all / Pause all**. One row tall.
-- **List (the core):** virtualized (SPEC: >50 items). Each row = selection checkbox, title (truncates with tooltip), size, an **inline progress region** carrying the pill bar + % + speed + stage token, and ETA. Stage token uses `label-mono` text _plus_ an icon (never color alone): `downloading / merging / queued / paused / completed / error / cancelled` (labels equal stage names; `cancelled` items appear under the **All** filter only — there is no Cancelled filter). → eye first: the topmost **active** (downloading) row — motion draws the eye, and that is correct.
+- **List (the core):** virtualized (SPEC: >50 items). Each row = selection checkbox, title (truncates with tooltip), size, an **inline progress region** carrying the pill bar + % + speed + stage token, and ETA. Stage token uses `label-mono` text _plus_ an icon (never color alone): `downloading / merging / queued / paused / completed / error / cancelled` (labels equal stage names; `cancelled` items appear under both the **All** and the dedicated **Cancelled** filter). → eye first: the topmost **active** (downloading) row — motion draws the eye, and that is correct.
 - **Selection bar:** appears only when ≥1 row is selected; hosts bulk actions (start/pause/cancel/remove/reorder). Reorder also available by drag with a movement threshold.
 - **Primary action on screen:** **+ Add** (sidebar). Row-level primary is "open detail" (click).
 - **States:**

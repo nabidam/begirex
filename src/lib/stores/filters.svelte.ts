@@ -5,7 +5,7 @@
 // decides which of those items are currently visible.
 import type { Item } from "../types";
 
-export type StatusFilter = "all" | "downloading" | "queued" | "paused" | "completed" | "failed";
+export type StatusFilter = "all" | "downloading" | "queued" | "paused" | "completed" | "failed" | "cancelled";
 
 export const STATUS_FILTERS: StatusFilter[] = [
   "all",
@@ -14,16 +14,18 @@ export const STATUS_FILTERS: StatusFilter[] = [
   "paused",
   "completed",
   "failed",
+  "cancelled",
 ];
 
-// UX.md S2: Downloading covers both `downloading` and `merging`; `cancelled`
-// items have no dedicated filter and only ever show up under "all".
+// "Active" in the sidebar covers both `downloading` and `merging`; terminal
+// cancellation remains separately recoverable rather than disappearing into All.
 const STAGES_BY_FILTER: Record<Exclude<StatusFilter, "all">, string[]> = {
   downloading: ["downloading", "merging"],
   queued: ["queued"],
   paused: ["paused"],
   completed: ["completed"],
   failed: ["error"],
+  cancelled: ["cancelled"],
 };
 
 function createFiltersStore() {

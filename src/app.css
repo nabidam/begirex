@@ -74,6 +74,19 @@
 
   --font-sans: "Instrument Sans", sans-serif;
   --font-mono: "JetBrains Mono", monospace;
+
+  /* Semantic layout roles. Keep component geometry out of component files
+     while retaining the desktop-only drawer contract from DESIGN.md. */
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 3rem;
+  --drawer-inline-size: 24rem;
+  --drawer-max-inline-size: calc(100vw - var(--space-xl));
+  --facts-label-inline-size: 6rem;
+  --facts-compact-label-inline-size: 4rem;
+  --z-drawer: 40;
 }
 
 /* Tailwind v4 theme binding — maps shadcn-svelte's expected utility/variable

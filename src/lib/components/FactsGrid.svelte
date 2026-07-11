@@ -27,6 +27,8 @@
   } = $props();
 
   let copied = $state(false);
+  let copyFailed = $state(false);
+  let folderError = $state(false);
 
   // ponytail: duplicated from QueueRow.svelte rather than extracted to a
   // shared util — QueueRow.svelte isn't in this task's touched-file list
@@ -51,9 +53,25 @@
   }
 
   async function copyAddress() {
-    await navigator.clipboard.writeText(item.url);
-    copied = true;
-    setTimeout(() => (copied = false), 1500);
+    try {
+      await navigator.clipboard.writeText(item.url);
+      copied = true;
+      copyFailed = false;
+      setTimeout(() => (copied = false), 1500);
+    } catch {
+      copyFailed = true;
+      setTimeout(() => (copyFailed = false), 2500);
+    }
+  }
+
+  async function openFolder() {
+    try {
+      await onOpenFolder(item.output_dir);
+      folderError = false;
+    } catch {
+      folderError = true;
+      setTimeout(() => (folderError = false), 2500);
+    }
   }
 
   const savingTo = $derived(item.output_path ?? `${item.output_dir}/${item.output_template}`);
@@ -64,12 +82,15 @@
 <Card.Root size="sm" class="gap-0">
   <Card.Content>
     <dl class="m-0 flex flex-col gap-2">
-      <div class="grid grid-cols-[6rem_1fr] items-baseline gap-2 text-[0.85em]">
+      <div class="grid grid-cols-[var(--facts-label-inline-size)_minmax(0,1fr)] items-baseline gap-2 text-xs">
         <dt class="text-muted-foreground">Address</dt>
         <dd class="m-0 flex min-w-0 items-center gap-2">
           <span class="min-w-0 flex-1 truncate font-mono" title={item.url}>{item.url}</span>
           <Button type="button" variant="link" size="sm" class="h-auto shrink-0 gap-1 p-0" onclick={copyAddress}>
-            {#if copied}
+            {#if copyFailed}
+              <Copy aria-hidden="true" class="size-3.5" />
+              Copy failed
+            {:else if copied}
               <Check aria-hidden="true" class="size-3.5" />
               Copied
             {:else}
@@ -80,7 +101,7 @@
         </dd>
       </div>
 
-      <div class="grid grid-cols-[6rem_1fr] items-baseline gap-2 text-[0.85em]">
+      <div class="grid grid-cols-[var(--facts-label-inline-size)_minmax(0,1fr)] items-baseline gap-2 text-xs">
         <dt class="text-muted-foreground">Saving to</dt>
         <dd class="m-0 flex min-w-0 items-center gap-2">
           <span class="min-w-0 flex-1 truncate font-mono" title={savingTo}>{savingTo}</span>
@@ -89,49 +110,53 @@
             variant="link"
             size="sm"
             class="h-auto shrink-0 gap-1 p-0"
-            onclick={() => onOpenFolder(item.output_dir)}
+            onclick={openFolder}
           >
             <FolderOpen aria-hidden="true" class="size-3.5" />
-            Open dir
+            {folderError ? "Open failed" : "Open dir"}
           </Button>
         </dd>
       </div>
 
-      <div class="grid grid-cols-[6rem_1fr] items-baseline gap-2 text-[0.85em]">
+      <div class="grid grid-cols-[var(--facts-label-inline-size)_minmax(0,1fr)] items-baseline gap-2 text-xs">
         <dt class="text-muted-foreground">Status</dt>
         <dd class="m-0"><StageToken stage={item.stage} /></dd>
       </div>
 
-      <div class="grid grid-cols-[6rem_1fr_4rem_1fr] items-baseline gap-2 text-[0.85em]">
+      <div class="grid grid-cols-[var(--facts-label-inline-size)_minmax(0,1fr)_var(--facts-compact-label-inline-size)_minmax(0,1fr)] items-baseline gap-2 text-xs">
         <dt class="text-muted-foreground">Size</dt>
-        <dd class="m-0 font-mono">{formatBytes(item.total_bytes)}</dd>
+        <dd class="m-0 min-w-0 truncate font-mono" title={formatBytes(item.total_bytes)}>{formatBytes(item.total_bytes)}</dd>
         <dt class="text-muted-foreground">Downloaded</dt>
-        <dd class="m-0 font-mono">{formatBytes(item.downloaded_bytes)}</dd>
+        <dd class="m-0 min-w-0 truncate font-mono" title={formatBytes(item.downloaded_bytes)}>{formatBytes(item.downloaded_bytes)}</dd>
       </div>
 
-      <div class="grid grid-cols-[6rem_1fr_4rem_1fr] items-baseline gap-2 text-[0.85em]">
+      <div class="grid grid-cols-[var(--facts-label-inline-size)_minmax(0,1fr)_var(--facts-compact-label-inline-size)_minmax(0,1fr)] items-baseline gap-2 text-xs">
         <dt class="text-muted-foreground">Speed</dt>
-        <dd class="m-0 font-mono">{formatSpeed(item.speed_bps)}</dd>
+        <dd class="m-0 min-w-0 truncate font-mono" title={formatSpeed(item.speed_bps)}>{formatSpeed(item.speed_bps)}</dd>
         <dt class="text-muted-foreground">ETA</dt>
-        <dd class="m-0 font-mono">{formatEta(item.eta_seconds)}</dd>
+        <dd class="m-0 min-w-0 truncate font-mono" title={formatEta(item.eta_seconds)}>{formatEta(item.eta_seconds)}</dd>
       </div>
 
-      <div class="grid grid-cols-[6rem_1fr] items-baseline gap-2 text-[0.85em]">
+      <div class="grid grid-cols-[var(--facts-label-inline-size)_minmax(0,1fr)] items-baseline gap-2 text-xs">
         <dt class="text-muted-foreground">Resume</dt>
         <dd class="m-0">{item.resume_capable ? "Yes (partial on disk)" : "No"}</dd>
       </div>
 
-      <div class="grid grid-cols-[6rem_1fr] items-baseline gap-2 text-[0.85em]">
+      <div class="grid grid-cols-[var(--facts-label-inline-size)_minmax(0,1fr)] items-baseline gap-2 text-xs">
         <dt class="text-muted-foreground">Proxy</dt>
         <dd class="m-0 font-mono">
-          {effectiveProxy ?? "—"}
-          <span class="font-sans text-muted-foreground">({proxyIsOverride ? "override" : "global"})</span>
+          {#if effectiveProxy}
+            {effectiveProxy}
+            <span class="font-sans text-muted-foreground">({proxyIsOverride ? "override" : "global"})</span>
+          {:else}
+            <span class="font-sans text-muted-foreground">Not configured</span>
+          {/if}
         </dd>
       </div>
 
-      <div class="grid grid-cols-[6rem_1fr] items-baseline gap-2 text-[0.85em]">
+      <div class="grid grid-cols-[var(--facts-label-inline-size)_minmax(0,1fr)] items-baseline gap-2 text-xs">
         <dt class="text-muted-foreground">Format</dt>
-        <dd class="m-0 font-mono">{item.format_expr} · Preset: {presetName ?? "None"}</dd>
+        <dd class="m-0 min-w-0 break-words font-mono">{item.format_expr} · Preset: {presetName ?? "None"}</dd>
       </div>
     </dl>
   </Card.Content>
@@ -140,7 +165,7 @@
 {#if item.stage === "error" && item.error_message}
   <pre
     class={cn(
-      "m-0 max-h-24 overflow-y-auto rounded-lg border border-border bg-muted p-2.5 font-mono text-[0.8em] whitespace-pre-wrap",
+      "m-0 max-h-24 overflow-y-auto rounded-lg border border-border bg-muted p-2.5 font-mono text-xs whitespace-pre-wrap",
       "text-[var(--error-token)]",
     )}
   >{item.error_message}</pre>

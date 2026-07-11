@@ -41,7 +41,9 @@
   import LogDisclosure from "../components/LogDisclosure.svelte";
   import { Button } from "$lib/components/ui/button";
   import { Progress } from "$lib/components/ui/progress";
+  import * as AlertDialog from "$lib/components/ui/alert-dialog";
   import { cn } from "$lib/utils";
+  import { toast } from "svelte-sonner";
   import X from "lucide-svelte/icons/x";
   import Pause from "lucide-svelte/icons/pause";
   import Play from "lucide-svelte/icons/play";
@@ -66,9 +68,9 @@
       : null,
   );
 
-  let toast = $state<{ message: string; undo: () => void } | null>(null);
-  let toastTimer: ReturnType<typeof setTimeout> | undefined;
-  let removeTimer: ReturnType<typeof setTimeout> | undefined;
+  let removeTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  let pendingAction = $state<"pause" | "resume" | "retry" | "cancel" | "remove" | "open" | null>(null);
+  let confirmState = $state<{ kind: "cancel" | "remove"; id: number; title: string } | null>(null);
 
   // Item removed (e.g. a row-level Remove elsewhere) while its drawer is
   // open — nothing left to show, so close.
@@ -82,46 +84,79 @@
     queueStore.closeDetail();
   }
 
-  function showUndoToast(message: string, undo: () => void) {
-    clearTimeout(toastTimer);
-    toast = {
-      message,
-      undo: () => {
-        undo();
-        toast = null;
-      },
-    };
-    toastTimer = setTimeout(() => {
-      toast = null;
-    }, TOAST_WINDOW_MS);
+  function requestCancel(id: number) {
+    if (!item || pendingAction) return;
+    confirmState = { kind: "cancel", id, title: item.title ?? item.url };
   }
 
-  // Cancel is real immediately (the process must actually stop); Undo
-  // restores via retry_item (stage -> queued) — same ponytail precedent as
-  // Queue.svelte's row/bulk Cancel, since retry_item is the only backend
-  // verb that reverses a cancel.
-  async function requestCancel(id: number) {
-    if (!confirm("Cancel this download?")) return;
-    await queueStore.cancel(id);
-    showUndoToast("Cancelled.", () => queueStore.retry(id));
-  }
-
-  // Remove defers the real bulk(remove) call for the toast window, same as
-  // Queue.svelte — Undo just clears the timer, nothing ever reached the
-  // backend. The row itself stays visible in the queue list during the
-  // window (this component has no access to Queue.svelte's local
-  // hiddenIds); the drawer closing is this action's immediate feedback.
   function requestRemove(id: number) {
-    if (!confirm("Remove this download?")) return;
+    if (!item || pendingAction) return;
+    confirmState = { kind: "remove", id, title: item.title ?? item.url };
+  }
+
+  async function confirmProceed() {
+    if (!confirmState) return;
+    const { kind, id } = confirmState;
+    confirmState = null;
+    pendingAction = kind;
+
+    if (kind === "cancel") {
+      await queueStore.cancel(id);
+      if (queueStore.error) {
+        toast.error(`Couldn’t cancel download. ${queueStore.error}`);
+      } else {
+        toast("Canceled download. Undo queues it again.", {
+          duration: TOAST_WINDOW_MS,
+          action: { label: "Undo", onClick: () => queueStore.retry(id) },
+        });
+      }
+      pendingAction = null;
+      return;
+    }
+
     close();
-    removeTimer = setTimeout(() => {
-      queueStore.bulk("remove", [id]);
+    const timer = setTimeout(async () => {
+      await queueStore.bulk("remove", [id]);
+      if (queueStore.error) toast.error(`Couldn’t remove download. ${queueStore.error}`);
+      removeTimers.delete(id);
     }, TOAST_WINDOW_MS);
-    showUndoToast("Removed.", () => clearTimeout(removeTimer));
+    removeTimers.set(id, timer);
+    toast("Removed from the queue. The output file is kept.", {
+      duration: TOAST_WINDOW_MS,
+      action: {
+        label: "Undo",
+        onClick: () => {
+          const pendingTimer = removeTimers.get(id);
+          if (pendingTimer) clearTimeout(pendingTimer);
+          removeTimers.delete(id);
+        },
+      },
+    });
+    pendingAction = null;
+  }
+
+  async function runItemAction(action: "pause" | "resume" | "retry", id: number) {
+    if (pendingAction) return;
+    pendingAction = action;
+    await queueStore[action](id);
+    if (queueStore.error) toast.error(`Couldn’t ${action} download. ${queueStore.error}`);
+    pendingAction = null;
+  }
+
+  async function openOutput(path: string, reveal = false) {
+    if (pendingAction) return;
+    pendingAction = "open";
+    try {
+      await openPath(path, reveal);
+    } catch {
+      toast.error(reveal ? "Couldn’t open the output folder." : "Couldn’t open the output file.");
+    } finally {
+      pendingAction = null;
+    }
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape" && queueStore.activeDetailId != null) {
+    if (e.key === "Escape" && confirmState === null && queueStore.activeDetailId != null) {
       e.preventDefault();
       e.stopImmediatePropagation();
       close();
@@ -136,12 +171,12 @@
 
 {#if item}
   <aside
-    class="fixed inset-y-0 end-0 z-40 flex w-96 max-w-[calc(100vw-4rem)] flex-col border-s border-border bg-[var(--surface-lowest)] shadow-[-4px_0_12px_color-mix(in_srgb,var(--surface-lowest)_60%,transparent)]"
-    aria-label="Download detail"
+    class="fixed inset-y-0 end-0 z-[var(--z-drawer)] flex w-[var(--drawer-inline-size)] max-w-[var(--drawer-max-inline-size)] flex-col border-s border-border bg-[var(--surface-lowest)]"
+    aria-labelledby="detail-drawer-title"
   >
-    <header class="flex flex-col gap-[0.6rem] border-b border-border px-[1.1rem] pt-4 pb-3">
+    <header class="flex flex-col gap-2 border-b border-border px-4 py-4">
       <div class="flex items-center justify-between gap-2">
-        <h2 class="m-0 min-w-0 truncate text-[1em]" title={item.title ?? item.url}>{item.title ?? item.url}</h2>
+        <h2 id="detail-drawer-title" class="m-0 min-w-0 truncate text-sm" title={item.title ?? item.url}>{item.title ?? item.url}</h2>
         <Button
           type="button"
           variant="ghost"
@@ -159,11 +194,11 @@
           value={Math.min(100, Math.max(0, item.percent))}
           class={cn("flex-1", ACTIVE_STAGES.has(item.stage) ? "h-2" : "h-1")}
         />
-        <span class="shrink-0 font-mono text-[0.78em] text-muted-foreground">{item.percent.toFixed(0)}%</span>
+        <span class="shrink-0 font-mono text-xs text-muted-foreground">{item.percent.toFixed(0)}%</span>
       </div>
     </header>
 
-    <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-[1.1rem] py-4">
+    <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
       <FactsGrid
         {item}
         globalProxy={settingsStore.settings?.global_proxy ?? null}
@@ -174,42 +209,44 @@
       <LogDisclosure itemId={item.id} stage={item.stage} />
     </div>
 
-    <footer class="flex flex-wrap justify-end gap-2 border-t border-border px-[1.1rem] py-3">
+    <footer class="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-3">
+      <div class="flex flex-wrap gap-2">
       {#if item.stage === "completed"}
-        <Button type="button" variant="outline" onclick={() => item.output_path && openPath(item.output_path)}>
+        <Button type="button" variant="outline" disabled={pendingAction !== null || !item.output_path} onclick={() => item.output_path && openOutput(item.output_path)}>
           <FileText aria-hidden="true" />
           Open file
         </Button>
-        <Button type="button" variant="outline" onclick={() => item.output_path && openPath(item.output_path, true)}>
+        <Button type="button" variant="outline" disabled={pendingAction !== null || !item.output_path} onclick={() => item.output_path && openOutput(item.output_path, true)}>
           <FolderOpen aria-hidden="true" />
           Open folder
         </Button>
       {:else}
         {#if ACTIVE_STAGES.has(item.stage)}
-          <Button type="button" variant="outline" onclick={() => queueStore.pause(item.id)}>
+          <Button type="button" variant="outline" disabled={pendingAction !== null} onclick={() => runItemAction("pause", item.id)}>
             <Pause aria-hidden="true" />
             Pause
           </Button>
         {:else if item.stage === "paused"}
-          <Button type="button" variant="outline" onclick={() => queueStore.resume(item.id)}>
+          <Button type="button" variant="outline" disabled={pendingAction !== null} onclick={() => runItemAction("resume", item.id)}>
             <Play aria-hidden="true" />
             Resume
           </Button>
         {/if}
         {#if item.stage === "error" || item.stage === "cancelled"}
-          <Button type="button" variant="default" onclick={() => queueStore.retry(item.id)}>
+          <Button type="button" variant="default" disabled={pendingAction !== null} onclick={() => runItemAction("retry", item.id)}>
             <RotateCcw aria-hidden="true" />
             Retry
           </Button>
         {/if}
         {#if !TERMINAL_STAGES.has(item.stage)}
-          <Button type="button" variant="outline" onclick={() => requestCancel(item.id)}>
+          <Button type="button" variant="destructive" disabled={pendingAction !== null} onclick={() => requestCancel(item.id)}>
             <Ban aria-hidden="true" />
             Cancel
           </Button>
         {/if}
       {/if}
-      <Button type="button" variant="outline" onclick={() => requestRemove(item.id)}>
+      </div>
+      <Button type="button" variant="destructive" disabled={pendingAction !== null} onclick={() => requestRemove(item.id)}>
         <Trash2 aria-hidden="true" />
         Remove
       </Button>
@@ -217,14 +254,28 @@
   </aside>
 {/if}
 
-{#if toast}
-  <div
-    class="fixed start-[50%] bottom-6 z-[45] flex -translate-x-1/2 items-center gap-3 rounded-lg border border-border bg-[var(--surface-high)] px-4 py-2.5 text-foreground"
-    role="status"
-  >
-    <span>{toast.message}</span>
-    <Button type="button" variant="link" size="sm" class="h-auto p-0 font-bold" onclick={() => toast?.undo()}>
-      Undo
-    </Button>
-  </div>
-{/if}
+<AlertDialog.Root
+  open={confirmState !== null}
+  onOpenChange={(open) => {
+    if (!open) confirmState = null;
+  }}
+>
+  <AlertDialog.Content>
+    <AlertDialog.Header>
+      <AlertDialog.Title>{confirmState?.kind === "cancel" ? "Cancel download?" : "Remove download from queue?"}</AlertDialog.Title>
+      <AlertDialog.Description>
+        {#if confirmState?.kind === "cancel"}
+          Stops “{confirmState.title}”. Undo queues it again.
+        {:else}
+          Removes “{confirmState?.title}” from this queue after five seconds. Undo keeps it in the queue; the output file is not deleted.
+        {/if}
+      </AlertDialog.Description>
+    </AlertDialog.Header>
+    <AlertDialog.Footer>
+      <AlertDialog.Cancel>Keep download</AlertDialog.Cancel>
+      <AlertDialog.Action variant="destructive" disabled={pendingAction !== null} onclick={confirmProceed}>
+        {confirmState?.kind === "cancel" ? "Cancel download" : "Remove from queue"}
+      </AlertDialog.Action>
+    </AlertDialog.Footer>
+  </AlertDialog.Content>
+</AlertDialog.Root>

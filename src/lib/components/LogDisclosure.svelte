@@ -18,6 +18,13 @@
   let lines = $state<LogLine[]>([]);
   let logEl: HTMLDivElement | undefined = $state();
   let lastItemId: number | undefined;
+  let isFollowing = $state(true);
+  let unseenLines = $state(0);
+  let previousLineCount = 0;
+  let loading = $state(false);
+  let loadError = $state<string | null>(null);
+  let reloadVersion = $state(0);
+  const MAX_LOG_LINES = 1000;
 
   // Re-open (and re-fetch) whenever the drawer switches to a different item,
   // or the item transitions into `error` while already viewed.
@@ -25,50 +32,97 @@
     if (itemId !== lastItemId) {
       lastItemId = itemId;
       open = stage === "error";
+      lines = [];
+      isFollowing = true;
+      unseenLines = 0;
+      previousLineCount = 0;
     } else if (stage === "error") {
       open = true;
     }
   });
 
   $effect(() => {
+    reloadVersion;
     if (!open) return;
     const id = itemId;
     let unlisten: (() => void) | undefined;
     let cancelled = false;
 
     (async () => {
-      lines = await getItemLog(id, 200);
-      await watchLog(id, true);
-      if (cancelled) return;
-      unlisten = await onLogLine((payload) => {
-        if (payload.id !== id) return;
-        lines = [...lines, { ts: Date.now(), stream: payload.stream, line: payload.line }];
-      });
+      loading = true;
+      loadError = null;
+      try {
+        const initialLines = await getItemLog(id, 200);
+        if (cancelled) return;
+        lines = initialLines.slice(-MAX_LOG_LINES);
+
+        await watchLog(id, true);
+        if (cancelled) {
+          await watchLog(id, false);
+          return;
+        }
+
+        unlisten = await onLogLine((payload) => {
+          if (payload.id !== id) return;
+          lines = [...lines, { ts: Date.now(), stream: payload.stream, line: payload.line }].slice(-MAX_LOG_LINES);
+        });
+      } catch (err) {
+        if (!cancelled) loadError = err instanceof Error ? err.message : "Unable to load the log.";
+      } finally {
+        if (!cancelled) loading = false;
+      }
     })();
 
     return () => {
       cancelled = true;
       unlisten?.();
-      watchLog(id, false);
+      void watchLog(id, false).catch(() => undefined);
     };
   });
 
   $effect(() => {
-    lines;
-    if (logEl) logEl.scrollTop = logEl.scrollHeight;
+    const lineCount = lines.length;
+    const newLineCount = Math.max(0, lineCount - previousLineCount);
+    if (logEl && isFollowing) {
+      logEl.scrollTop = logEl.scrollHeight;
+      unseenLines = 0;
+    } else if (newLineCount > 0) {
+      unseenLines += newLineCount;
+    }
+    previousLineCount = lineCount;
   });
+
+  function handleLogScroll() {
+    if (!logEl) return;
+    isFollowing = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight <= 8;
+    if (isFollowing) unseenLines = 0;
+  }
+
+  function jumpToLatest() {
+    if (logEl) logEl.scrollTop = logEl.scrollHeight;
+    isFollowing = true;
+    unseenLines = 0;
+  }
+
+  function retryLog() {
+    lines = [];
+    unseenLines = 0;
+    isFollowing = true;
+    previousLineCount = 0;
+    reloadVersion += 1;
+  }
 
   onMount(() => {
     return () => {
       // Belt-and-suspenders: the `$effect` cleanup above already turns
       // watching off when `open` flips false, but a hard unmount while
       // still open (drawer closed) needs the same cleanup.
-      if (open) watchLog(itemId, false);
+      if (open) void watchLog(itemId, false).catch(() => undefined);
     };
   });
 </script>
 
-<Collapsible.Root bind:open class="flex flex-col gap-[0.4rem]">
+<Collapsible.Root bind:open class="flex flex-col gap-1">
   <Collapsible.Trigger>
     {#snippet child({ props })}
       <Button
@@ -85,12 +139,27 @@
     {/snippet}
   </Collapsible.Trigger>
   <Collapsible.Content>
+    {#if loadError}
+      <div class="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted p-2 text-xs" role="alert">
+        <span class="min-w-0 flex-1">Couldn’t load the log. {loadError}</span>
+        <Button type="button" variant="outline" size="xs" onclick={retryLog}>Retry</Button>
+      </div>
+    {/if}
+    {#if !isFollowing && unseenLines > 0}
+      <Button type="button" variant="outline" size="xs" class="mb-2" onclick={jumpToLatest}>
+        {unseenLines} new {unseenLines === 1 ? "line" : "lines"}
+      </Button>
+    {/if}
     <div
-      class="max-h-48 overflow-y-auto rounded-lg border border-border bg-muted p-2.5 font-mono text-[0.78em]"
+      class="max-h-48 overflow-y-auto rounded-lg border border-border bg-muted p-2.5 font-mono text-xs"
       bind:this={logEl}
       role="log"
+      aria-live={isFollowing ? "polite" : "off"}
+      onscroll={handleLogScroll}
     >
-      {#if lines.length === 0}
+      {#if loading && lines.length === 0}
+        <p class="m-0 text-muted-foreground">Loading log…</p>
+      {:else if lines.length === 0}
         <p class="m-0 text-muted-foreground">No output yet.</p>
       {:else}
         {#each lines as l, i (i)}
