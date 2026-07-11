@@ -663,8 +663,18 @@ const DRY_PARSE_INFO_JSON: &str = r#"{
 /// invocation. A non-zero exit (bad syntax or no stand-in format matches)
 /// becomes `INVALID_FORMAT_EXPR` carrying yt-dlp's stderr verbatim (§7.1).
 pub async fn dry_parse_format(ytdlp_path: &str, format_expr: &str) -> Result<(), AppError> {
-    let info_json_path =
-        std::env::temp_dir().join(format!("begirex-dry-parse-{}.json", std::process::id()));
+    // Unique scratch path per invocation: a process-id-only name was shared by
+    // every concurrent validation, so one call could overwrite or delete the
+    // JSON another's yt-dlp was still reading — yielding spurious
+    // INVALID_FORMAT_EXPR. The monotonic counter disambiguates within the
+    // process; we remove only this call's own file below.
+    static DRY_PARSE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = DRY_PARSE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let info_json_path = std::env::temp_dir().join(format!(
+        "begirex-dry-parse-{}-{}.json",
+        std::process::id(),
+        seq
+    ));
     tokio::fs::write(&info_json_path, DRY_PARSE_INFO_JSON)
         .await
         .map_err(|e| AppError::InvalidFormatExpr {

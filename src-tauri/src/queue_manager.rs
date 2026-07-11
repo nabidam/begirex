@@ -114,7 +114,12 @@ fn spawn_and_refill(
 /// no item is queued.
 pub fn try_fill_slot(db: Db, binaries: BinaryPaths, emitter: Arc<dyn Emitter>, n_slots: i64, registry: ActiveRegistry) {
     loop {
-        let next = {
+        // Select and claim under a single lock hold: releasing the mutex between
+        // picking a row and marking it `downloading` let a concurrent refill pick
+        // the same row and both spawn (exceeding N / double-download). The claim
+        // is a conditional `queued`→`downloading` transition; the caller that
+        // wins the row (one row affected) spawns, the loser loops to the next.
+        let started = {
             let conn = match db.lock() {
                 Ok(c) => c,
                 Err(_) => return, // ponytail: poisoned mutex means a prior panic already broke the app; nothing to schedule.
@@ -126,23 +131,21 @@ pub fn try_fill_slot(db: Db, binaries: BinaryPaths, emitter: Arc<dyn Emitter>, n
             if active >= n_slots {
                 return;
             }
-            match pick_next_queued(&conn) {
+            let next = match pick_next_queued(&conn) {
                 Ok(Some(item)) => item,
                 _ => return,
+            };
+            match persistence::claim_queued_item(&conn, next.id) {
+                Ok(true) => {
+                    let mut started = next;
+                    started.stage = "downloading".to_string();
+                    started
+                }
+                Ok(false) => continue, // lost the race for this row; next iteration re-checks and picks another
+                Err(_) => return,
             }
         };
 
-        let mut started = next;
-        {
-            let conn = match db.lock() {
-                Ok(c) => c,
-                Err(_) => return,
-            };
-            if persistence::set_stage(&conn, started.id, "downloading").is_err() {
-                return;
-            }
-        }
-        started.stage = "downloading".to_string();
         emitter.emit_stage_changed(started.id, "downloading", None);
 
         spawn_and_refill(

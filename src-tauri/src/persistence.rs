@@ -228,6 +228,20 @@ pub fn set_stage(conn: &Connection, id: i64, stage: &str) -> Result<(), AppError
     Ok(())
 }
 
+/// Atomically claim a `queued` item for a free slot: flip `queued`→`downloading`
+/// only if the row is still `queued`, returning whether this call won it (one
+/// row affected). Two concurrent slot-refills can pick the same lowest-position
+/// row (e.g. `add` racing a finishing download's refill); guarded by the
+/// caller holding the DB mutex across select+claim, the loser sees `false` and
+/// skips spawning, so we never exceed N or double-download the same item.
+pub fn claim_queued_item(conn: &Connection, id: i64) -> Result<bool, AppError> {
+    let affected = conn.execute(
+        "UPDATE items SET stage = 'downloading', updated_at = ?1 WHERE id = ?2 AND stage = 'queued'",
+        rusqlite::params![now_unix(), id],
+    )?;
+    Ok(affected == 1)
+}
+
 /// Finds items left `downloading`/`merging` — crash-dirty because the yt-dlp
 /// supervising process died with the app (§8 durability). Ordered by
 /// `queue_position` so launch-reconcile resumes in a stable, predictable
@@ -835,6 +849,20 @@ mod tests {
 
         let fetched = get_item(&conn, item.id).unwrap();
         assert_eq!(fetched.stage, "downloading");
+    }
+
+    #[test]
+    fn claim_queued_item_wins_once_and_loses_on_already_claimed() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_for_test(&conn);
+        let item = insert_item(&conn, new_test_item("https://a", "queued")).unwrap();
+
+        // First claim wins and flips the row.
+        assert!(claim_queued_item(&conn, item.id).unwrap());
+        assert_eq!(get_item(&conn, item.id).unwrap().stage, "downloading");
+
+        // A racing second claim of the same (no-longer-queued) row loses.
+        assert!(!claim_queued_item(&conn, item.id).unwrap());
     }
 
     #[test]
