@@ -65,7 +65,11 @@ pub struct UpdatePresetRequest {
 /// present — see module doc). Does not touch `is_default` — that's
 /// `set_default_preset`'s job, kept separate so "star this preset" can't
 /// accidentally get bundled with an in-flight edit of unrelated fields.
-pub fn update_preset(conn: &Connection, id: i64, request: UpdatePresetRequest) -> Result<Preset, AppError> {
+pub fn update_preset(
+    conn: &Connection,
+    id: i64,
+    request: UpdatePresetRequest,
+) -> Result<Preset, AppError> {
     persistence::update_preset(
         conn,
         id,
@@ -173,7 +177,11 @@ mod tests {
         )
         .unwrap();
         assert!(fourk.is_default);
-        assert!(!persistence::get_preset(&conn, archive.id).unwrap().is_default);
+        assert!(
+            !persistence::get_preset(&conn, archive.id)
+                .unwrap()
+                .is_default
+        );
     }
 
     #[test]

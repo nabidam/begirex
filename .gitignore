@@ -1,4 +1,27 @@
-node_modules
-dist
-src-tauri/target
-src-tauri/gen
+# Dependencies and generated output
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local tooling and operating-system files
+.impeccable/
+REVIEW_*.md
+.DS_Store
+Thumbs.db
+*.log
+
+# Tauri build artifacts and local bundled executables
+src-tauri/binaries/bin/yt-dlp
+src-tauri/binaries/bin/yt-dlp.exe
+src-tauri/binaries/bin/ffmpeg
+src-tauri/binaries/bin/ffmpeg.exe

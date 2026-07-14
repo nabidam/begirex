@@ -296,7 +296,12 @@ const LOG_LINES_PER_ITEM: i64 = 500;
 /// Appends one captured stdout/stderr line to `item_logs`, then trims that
 /// item's log back down to `LOG_LINES_PER_ITEM` (oldest first) — keeps the
 /// table bounded regardless of how chatty a given yt-dlp run is.
-pub fn insert_log(conn: &Connection, item_id: i64, stream: &str, line: &str) -> Result<(), AppError> {
+pub fn insert_log(
+    conn: &Connection,
+    item_id: i64,
+    stream: &str,
+    line: &str,
+) -> Result<(), AppError> {
     conn.execute(
         "INSERT INTO item_logs (item_id, ts, stream, line) VALUES (?1, ?2, ?3, ?4)",
         rusqlite::params![item_id, now_unix(), stream, line],
@@ -323,7 +328,11 @@ pub struct LogLine {
 /// returns only the last N lines (still chronological in the result) —
 /// `None` returns everything currently retained (already capped at
 /// `LOG_LINES_PER_ITEM` by `insert_log`).
-pub fn get_item_log(conn: &Connection, item_id: i64, tail: Option<i64>) -> Result<Vec<LogLine>, AppError> {
+pub fn get_item_log(
+    conn: &Connection,
+    item_id: i64,
+    tail: Option<i64>,
+) -> Result<Vec<LogLine>, AppError> {
     let mut rows = match tail {
         Some(n) => conn
             .prepare(
@@ -435,7 +444,9 @@ fn map_preset_write_err(err: rusqlite::Error, name: &str) -> AppError {
         // partial index (ARCHITECTURE §3) is a programming error the caller
         // should've avoided via `clear_default_preset` first, so it falls
         // through to the generic `DbError`.
-        if sqlite_err.code == rusqlite::ErrorCode::ConstraintViolation && detail.contains("presets.name") {
+        if sqlite_err.code == rusqlite::ErrorCode::ConstraintViolation
+            && detail.contains("presets.name")
+        {
             return AppError::PresetNameTaken {
                 message: format!("a preset named '{name}' already exists"),
             };
@@ -535,7 +546,10 @@ pub fn set_default_preset(conn: &Connection, id: i64) -> Result<(), AppError> {
 /// The preset with the lowest id other than `excluding_id` — used to pick a
 /// promotion target when the default preset is deleted (ARCHITECTURE §3
 /// invariant: exactly one default must exist whenever ≥1 preset exists).
-pub fn first_other_preset_id(conn: &Connection, excluding_id: i64) -> Result<Option<i64>, AppError> {
+pub fn first_other_preset_id(
+    conn: &Connection,
+    excluding_id: i64,
+) -> Result<Option<i64>, AppError> {
     Ok(conn
         .query_row(
             "SELECT id FROM presets WHERE id != ?1 ORDER BY id ASC LIMIT 1",
@@ -603,7 +617,11 @@ fn seed(conn: &Connection, default_output_dir: &str) -> rusqlite::Result<()> {
 /// the user later changes via S7. No-op on a `light` build — the caller
 /// (`lib.rs` setup, gated on `binary_manager::build_flavor()`) only calls
 /// this when bundled.
-pub fn seed_bundled_binaries(conn: &Connection, ytdlp_path: &str, ffmpeg_path: &str) -> rusqlite::Result<()> {
+pub fn seed_bundled_binaries(
+    conn: &Connection,
+    ytdlp_path: &str,
+    ffmpeg_path: &str,
+) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT OR IGNORE INTO settings (key, value) VALUES ('ytdlp_path', ?1)",
         [ytdlp_path],
@@ -625,11 +643,9 @@ fn now_unix() -> i64 {
 /// Reads a single `settings` value; `None` if the key is unset (distinct from
 /// an empty string). Business logic (validation, defaults) is the caller's.
 pub fn get_setting(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
-    conn.query_row(
-        "SELECT value FROM settings WHERE key = ?1",
-        [key],
-        |row| row.get(0),
-    )
+    conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+        row.get(0)
+    })
     .map(Some)
     .or_else(|err| match err {
         rusqlite::Error::QueryReturnedNoRows => Ok(None),
@@ -700,7 +716,11 @@ mod tests {
         seed(&conn, "/home/test/Downloads").unwrap();
 
         let flavor: String = conn
-            .query_row("SELECT value FROM settings WHERE key = 'build_flavor'", [], |row| row.get(0))
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'build_flavor'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         // This crate is compiled for tests without `--features bundled`.
         assert_eq!(flavor, "light");
@@ -713,15 +733,24 @@ mod tests {
         seed(&conn, "/home/test/Downloads").unwrap();
 
         seed_bundled_binaries(&conn, "/opt/begirex/bin/yt-dlp", "/opt/begirex/bin/ffmpeg").unwrap();
-        assert_eq!(get_setting(&conn, "ytdlp_path").unwrap().as_deref(), Some("/opt/begirex/bin/yt-dlp"));
-        assert_eq!(get_setting(&conn, "ffmpeg_path").unwrap().as_deref(), Some("/opt/begirex/bin/ffmpeg"));
+        assert_eq!(
+            get_setting(&conn, "ytdlp_path").unwrap().as_deref(),
+            Some("/opt/begirex/bin/yt-dlp")
+        );
+        assert_eq!(
+            get_setting(&conn, "ffmpeg_path").unwrap().as_deref(),
+            Some("/opt/begirex/bin/ffmpeg")
+        );
 
         // A user later picking a different path (S7 "Change…") writes via
         // `set_setting`, not this fn — re-running seed_bundled_binaries (e.g.
         // relaunch) must not clobber it.
         set_setting(&conn, "ytdlp_path", "/custom/yt-dlp").unwrap();
         seed_bundled_binaries(&conn, "/opt/begirex/bin/yt-dlp", "/opt/begirex/bin/ffmpeg").unwrap();
-        assert_eq!(get_setting(&conn, "ytdlp_path").unwrap().as_deref(), Some("/custom/yt-dlp"));
+        assert_eq!(
+            get_setting(&conn, "ytdlp_path").unwrap().as_deref(),
+            Some("/custom/yt-dlp")
+        );
     }
 
     #[test]
@@ -739,7 +768,9 @@ mod tests {
 
         // Second open must not re-seed.
         let conn2 = open_and_init(&db_path, "/home/test/Downloads").unwrap();
-        let preset_count: i64 = conn2.query_row("SELECT count(*) FROM presets", [], |row| row.get(0)).unwrap();
+        let preset_count: i64 = conn2
+            .query_row("SELECT count(*) FROM presets", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(preset_count, 1);
 
         std::fs::remove_dir_all(&dir).ok();
@@ -815,8 +846,17 @@ mod tests {
         migrate_for_test(&conn);
         let item = insert_item(&conn, new_test_item("https://a", "downloading")).unwrap();
 
-        checkpoint_progress(&conn, item.id, "downloading", Some(1024), Some(4096), 25.0, Some(512), Some(6))
-            .unwrap();
+        checkpoint_progress(
+            &conn,
+            item.id,
+            "downloading",
+            Some(1024),
+            Some(4096),
+            25.0,
+            Some(512),
+            Some(6),
+        )
+        .unwrap();
 
         let fetched = get_item(&conn, item.id).unwrap();
         assert_eq!(fetched.downloaded_bytes, 1024);
@@ -832,7 +872,14 @@ mod tests {
         migrate_for_test(&conn);
         let item = insert_item(&conn, new_test_item("https://a", "downloading")).unwrap();
 
-        finish_item(&conn, item.id, "completed", Some("/tmp/out/video.mp4"), None).unwrap();
+        finish_item(
+            &conn,
+            item.id,
+            "completed",
+            Some("/tmp/out/video.mp4"),
+            None,
+        )
+        .unwrap();
 
         let fetched = get_item(&conn, item.id).unwrap();
         assert_eq!(fetched.stage, "completed");
@@ -905,7 +952,11 @@ mod tests {
 
         assert!(get_item(&conn, item.id).is_err());
         let log_count: i64 = conn
-            .query_row("SELECT count(*) FROM item_logs WHERE item_id = ?1", [item.id], |r| r.get(0))
+            .query_row(
+                "SELECT count(*) FROM item_logs WHERE item_id = ?1",
+                [item.id],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(log_count, 0);
     }
@@ -937,7 +988,11 @@ mod tests {
         }
 
         let count: i64 = conn
-            .query_row("SELECT count(*) FROM item_logs WHERE item_id = ?1", [item.id], |r| r.get(0))
+            .query_row(
+                "SELECT count(*) FROM item_logs WHERE item_id = ?1",
+                [item.id],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(count, 500);
 
@@ -971,17 +1026,25 @@ mod tests {
         let item = insert_item(&conn, new_test_item("https://dup", "queued")).unwrap();
 
         assert_eq!(
-            find_active_item_by_url(&conn, "https://dup").unwrap().map(|i| i.id),
+            find_active_item_by_url(&conn, "https://dup")
+                .unwrap()
+                .map(|i| i.id),
             Some(item.id)
         );
-        assert!(find_active_item_by_url(&conn, "https://not-there").unwrap().is_none());
+        assert!(find_active_item_by_url(&conn, "https://not-there")
+            .unwrap()
+            .is_none());
 
         finish_item(&conn, item.id, "completed", Some("/tmp/x.mp4"), None).unwrap();
-        assert!(find_active_item_by_url(&conn, "https://dup").unwrap().is_none());
+        assert!(find_active_item_by_url(&conn, "https://dup")
+            .unwrap()
+            .is_none());
 
         let item2 = insert_item(&conn, new_test_item("https://dup2", "downloading")).unwrap();
         finish_item(&conn, item2.id, "cancelled", None, None).unwrap();
-        assert!(find_active_item_by_url(&conn, "https://dup2").unwrap().is_none());
+        assert!(find_active_item_by_url(&conn, "https://dup2")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -990,7 +1053,14 @@ mod tests {
         migrate_for_test(&conn);
         let item = insert_item(&conn, new_test_item("https://a", "downloading")).unwrap();
 
-        finish_item(&conn, item.id, "error", None, Some("Requested format is not available")).unwrap();
+        finish_item(
+            &conn,
+            item.id,
+            "error",
+            None,
+            Some("Requested format is not available"),
+        )
+        .unwrap();
 
         let fetched = get_item(&conn, item.id).unwrap();
         assert_eq!(fetched.stage, "error");

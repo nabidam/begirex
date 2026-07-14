@@ -113,7 +113,13 @@ impl Harness {
         }
     }
 
-    fn add(&self, url: &str, format_expr: &str, output_template: &str, extra_args: Option<&str>) -> Item {
+    fn add(
+        &self,
+        url: &str,
+        format_expr: &str,
+        output_template: &str,
+        extra_args: Option<&str>,
+    ) -> Item {
         queue_manager::add_and_schedule(
             Arc::clone(&self.db),
             Arc::clone(&self.emitter),
@@ -148,7 +154,12 @@ async fn failed_items_full_stderr_is_retrievable_via_get_item_log() {
     let h = Harness::new("ac1_stderr_log");
     // A domain that resolves to nothing real — yt-dlp fails fast with a
     // non-empty stderr, no need to wait out a real download.
-    let item = h.add("https://example.invalid/does-not-exist", "best", "bad.%(ext)s", None);
+    let item = h.add(
+        "https://example.invalid/does-not-exist",
+        "best",
+        "bad.%(ext)s",
+        None,
+    );
 
     let final_item = poll_item(&h.db, item.id, Duration::from_secs(30), |i| {
         matches!(i.stage.as_str(), "completed" | "error")
@@ -159,11 +170,18 @@ async fn failed_items_full_stderr_is_retrievable_via_get_item_log() {
         let conn = h.db.lock().unwrap();
         persistence::get_item_log(&conn, item.id, None).unwrap()
     };
-    assert!(!log.is_empty(), "expected stderr lines to be captured in item_logs");
+    assert!(
+        !log.is_empty(),
+        "expected stderr lines to be captured in item_logs"
+    );
     assert!(log.iter().all(|l| l.stream == "stderr"));
     // The full stderr (not a truncated summary) should be present — same
     // text `error_message` was built from.
-    let joined: String = log.iter().map(|l| l.line.as_str()).collect::<Vec<_>>().join("\n");
+    let joined: String = log
+        .iter()
+        .map(|l| l.line.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(!joined.trim().is_empty());
 
     h.cleanup();
@@ -182,14 +200,30 @@ async fn retry_on_partial_error_resumes_from_at_least_prior_bytes() {
     // kill the child the same way `pause` does (keeps the partial file on
     // disk, unlike `cancel`), but record it as `error` instead of `paused` —
     // standing in for a real crash/network-drop mid-download.
-    let mid = poll_item(&h.db, item.id, Duration::from_secs(30), |i| i.downloaded_bytes > 0);
-    assert!(mid.downloaded_bytes > 0, "expected some progress before failing");
+    let mid = poll_item(&h.db, item.id, Duration::from_secs(30), |i| {
+        i.downloaded_bytes > 0
+    });
+    assert!(
+        mid.downloaded_bytes > 0,
+        "expected some progress before failing"
+    );
 
-    engine_supervisor::pause(&h.registry, item.id).await.unwrap();
+    engine_supervisor::pause(&h.registry, item.id)
+        .await
+        .unwrap();
     let pre_failure_bytes = {
         let conn = h.db.lock().unwrap();
-        persistence::finish_item(&conn, item.id, "error", None, Some("simulated mid-download failure")).unwrap();
-        persistence::get_item(&conn, item.id).unwrap().downloaded_bytes
+        persistence::finish_item(
+            &conn,
+            item.id,
+            "error",
+            None,
+            Some("simulated mid-download failure"),
+        )
+        .unwrap();
+        persistence::get_item(&conn, item.id)
+            .unwrap()
+            .downloaded_bytes
     };
     assert!(pre_failure_bytes > 0);
 

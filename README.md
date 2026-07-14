@@ -1,6 +1,31 @@
 # BegireX
 
-Desktop GUI for yt-dlp. Tauri 2 + Svelte 5 frontend, Rust backend, SQLite persistence.
+> A local-first desktop download manager powered by yt-dlp.
+
+BegireX is a Tauri desktop application for managing video and audio downloads
+through a clear queue-based interface. It uses yt-dlp and FFmpeg locally; no
+accounts, telemetry, or cloud service are required.
+
+**Status:** v0.1.0 is an early release. Please report bugs and avoid relying
+on it for irreplaceable download queues.
+
+## Features
+
+- Queue, pause, resume, retry, reorder, and cancel downloads
+- Inspect available formats before adding a download
+- Save reusable format and output presets
+- Persist queues and settings locally in SQLite
+- Find or download yt-dlp and FFmpeg during onboarding
+- Choose a light build (default) or a build that bundles those executables
+
+## Install
+
+Download the installer for your platform from the repository's
+[Releases](https://github.com/nabidam/begirex/releases) page. The first launch
+guides you through locating or downloading yt-dlp and FFmpeg.
+
+Use BegireX only to download content you are authorized to access, and comply
+with the terms of the source service and applicable law.
 
 ## Stack
 
@@ -34,6 +59,26 @@ cd src-tauri
 cargo test              # unit + integration tests
 cargo test -- --ignored # includes tests that spawn real yt-dlp (network)
 ```
+
+CI also enforces Rust formatting and verifies that the frontend production
+bundle builds successfully.
+
+## Security
+
+Please report vulnerabilities privately as described in
+[SECURITY.md](SECURITY.md). Do not open public issues for suspected security
+problems.
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and adhere to
+the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## License
+
+BegireX is released under the [MIT License](LICENSE). yt-dlp and FFmpeg are
+separate projects with their own licenses; BegireX does not grant rights to
+them.
 
 ## Docs
 

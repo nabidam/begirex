@@ -151,12 +151,22 @@ async fn pause_freezes_progress_then_resume_continues_from_offset() {
     let item = h.add(2, "sample_ac1.%(ext)s");
 
     // Let real progress accumulate before pausing.
-    let mid = poll_item(&h.db, item.id, Duration::from_secs(30), |i| i.downloaded_bytes > 0);
-    assert!(mid.downloaded_bytes > 0, "expected some progress before pausing");
+    let mid = poll_item(&h.db, item.id, Duration::from_secs(30), |i| {
+        i.downloaded_bytes > 0
+    });
+    assert!(
+        mid.downloaded_bytes > 0,
+        "expected some progress before pausing"
+    );
 
-    queue_manager::pause_item(Arc::clone(&h.db), Arc::clone(&h.emitter), Arc::clone(&h.registry), item.id)
-        .await
-        .unwrap();
+    queue_manager::pause_item(
+        Arc::clone(&h.db),
+        Arc::clone(&h.emitter),
+        Arc::clone(&h.registry),
+        item.id,
+    )
+    .await
+    .unwrap();
 
     let paused = {
         let conn = h.db.lock().unwrap();
@@ -219,7 +229,9 @@ async fn cancel_frees_slot_starts_queued_item_and_deletes_partial_file() {
     assert_eq!(second_before.stage, "queued");
 
     // Wait until the first item has actually started writing a partial file.
-    poll_item(&h.db, first.id, Duration::from_secs(30), |i| i.downloaded_bytes > 0);
+    poll_item(&h.db, first.id, Duration::from_secs(30), |i| {
+        i.downloaded_bytes > 0
+    });
     let expected_partial = h.work_dir.join("sample_ac2_first.mp4");
 
     queue_manager::cancel_item(
@@ -240,13 +252,16 @@ async fn cancel_frees_slot_starts_queued_item_and_deletes_partial_file() {
     assert_eq!(cancelled.stage, "cancelled");
 
     // The freed slot lets the queued item start.
-    let second_after = poll_item(&h.db, second.id, Duration::from_secs(10), |i| i.stage != "queued");
+    let second_after = poll_item(&h.db, second.id, Duration::from_secs(10), |i| {
+        i.stage != "queued"
+    });
     assert_eq!(second_after.stage, "downloading");
 
     // Give the filesystem a beat to reflect the deletion, then confirm gone.
     std::thread::sleep(Duration::from_millis(300));
     assert!(
-        !expected_partial.exists() && !std::path::Path::new(&format!("{}.part", expected_partial.display())).exists(),
+        !expected_partial.exists()
+            && !std::path::Path::new(&format!("{}.part", expected_partial.display())).exists(),
         "expected the cancelled item's partial file to be gone from disk"
     );
 
@@ -322,7 +337,10 @@ async fn reorder_queued_item_above_another_changes_which_starts_next() {
             persistence::get_item(&conn, b.id).unwrap(),
         )
     };
-    assert!(b_after.queue_position < a_after.queue_position, "b should now sort before a");
+    assert!(
+        b_after.queue_position < a_after.queue_position,
+        "b should now sort before a"
+    );
 
     // Free the slot: cancel the running item; the scheduler should now pick
     // b (now lowest-position queued), not a.
@@ -337,8 +355,13 @@ async fn reorder_queued_item_above_another_changes_which_starts_next() {
     .await
     .unwrap();
 
-    let b_started = poll_item(&h.db, b.id, Duration::from_secs(10), |i| i.stage != "queued");
-    assert_eq!(b_started.stage, "downloading", "b (reordered above a) should start next");
+    let b_started = poll_item(&h.db, b.id, Duration::from_secs(10), |i| {
+        i.stage != "queued"
+    });
+    assert_eq!(
+        b_started.stage, "downloading",
+        "b (reordered above a) should start next"
+    );
     let a_final = {
         let conn = h.db.lock().unwrap();
         persistence::get_item(&conn, a.id).unwrap()
@@ -388,7 +411,10 @@ async fn decreasing_concurrency_never_kills_in_flight_item_increasing_fills_a_sl
         persistence::get_item(&conn, running.id).unwrap()
     };
     assert!(
-        matches!(running_after_decrease.stage.as_str(), "downloading" | "merging" | "completed"),
+        matches!(
+            running_after_decrease.stage.as_str(),
+            "downloading" | "merging" | "completed"
+        ),
         "decreasing N must not kill an in-flight item, got {}",
         running_after_decrease.stage
     );
@@ -402,8 +428,13 @@ async fn decreasing_concurrency_never_kills_in_flight_item_increasing_fills_a_sl
         3,
     )
     .unwrap();
-    let queued2_after = poll_item(&h.db, queued2.id, Duration::from_secs(15), |i| i.stage != "queued");
-    assert_ne!(queued2_after.stage, "queued", "increasing N should immediately fill the freed-up slot");
+    let queued2_after = poll_item(&h.db, queued2.id, Duration::from_secs(15), |i| {
+        i.stage != "queued"
+    });
+    assert_ne!(
+        queued2_after.stage, "queued",
+        "increasing N should immediately fill the freed-up slot"
+    );
 
     for id in [running.id, queued.id, queued2.id] {
         poll_item(&h.db, id, Duration::from_secs(60), |i| {
@@ -422,8 +453,12 @@ async fn bulk_pause_pauses_every_active_item() {
     let a = h.add(2, "sample_bulk_a.%(ext)s");
     let b = h.add(2, "sample_bulk_b.%(ext)s");
 
-    poll_item(&h.db, a.id, Duration::from_secs(30), |i| i.downloaded_bytes > 0);
-    poll_item(&h.db, b.id, Duration::from_secs(30), |i| i.downloaded_bytes > 0);
+    poll_item(&h.db, a.id, Duration::from_secs(30), |i| {
+        i.downloaded_bytes > 0
+    });
+    poll_item(&h.db, b.id, Duration::from_secs(30), |i| {
+        i.downloaded_bytes > 0
+    });
 
     let updated = queue_manager::bulk_action(
         Arc::clone(&h.db),

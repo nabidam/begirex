@@ -112,7 +112,13 @@ fn spawn_and_refill(
 /// `set_concurrency` increase (where more than one slot can open up at
 /// once — hence the loop, not a single pick). No-op once no slot is free or
 /// no item is queued.
-pub fn try_fill_slot(db: Db, binaries: BinaryPaths, emitter: Arc<dyn Emitter>, n_slots: i64, registry: ActiveRegistry) {
+pub fn try_fill_slot(
+    db: Db,
+    binaries: BinaryPaths,
+    emitter: Arc<dyn Emitter>,
+    n_slots: i64,
+    registry: ActiveRegistry,
+) {
     loop {
         // Select and claim under a single lock hold: releasing the mutex between
         // picking a row and marking it `downloading` let a concurrent refill pick
@@ -174,7 +180,11 @@ pub fn add_and_schedule(
     let item = {
         let conn = db.lock().expect("db mutex poisoned");
         let active = persistence::count_active_items(&conn)?;
-        let stage = if active < n_slots { "downloading" } else { "queued" };
+        let stage = if active < n_slots {
+            "downloading"
+        } else {
+            "queued"
+        };
         persistence::insert_item(
             &conn,
             NewItem {
@@ -218,8 +228,12 @@ pub async fn add_download_expanding(
     registry: ActiveRegistry,
     params: AddDownloadParams,
 ) -> Result<Vec<Item>, AppError> {
-    let expansion =
-        engine_supervisor::expand_playlist(&binaries.ytdlp_path, &params.url, params.proxy.as_deref()).await?;
+    let expansion = engine_supervisor::expand_playlist(
+        &binaries.ytdlp_path,
+        &params.url,
+        params.proxy.as_deref(),
+    )
+    .await?;
 
     let mut items = Vec::with_capacity(expansion.entries.len());
     for entry in expansion.entries {
@@ -297,7 +311,12 @@ pub fn reconcile_and_resume(
 /// kills its child (partial bytes + `resume_capable` stay on disk per
 /// ARCHITECTURE §4) before flipping the DB row; otherwise just flips the
 /// stage (e.g. pausing a `queued` item keeps it out of the scheduler's pick).
-pub async fn pause_item(db: Db, emitter: Arc<dyn Emitter>, registry: ActiveRegistry, item_id: i64) -> Result<Item, AppError> {
+pub async fn pause_item(
+    db: Db,
+    emitter: Arc<dyn Emitter>,
+    registry: ActiveRegistry,
+    item_id: i64,
+) -> Result<Item, AppError> {
     let item = {
         let conn = db.lock().expect("db mutex poisoned");
         persistence::get_item(&conn, item_id)?
@@ -333,7 +352,11 @@ pub fn resume_item(
         let conn = db.lock().expect("db mutex poisoned");
         persistence::count_active_items(&conn)?
     };
-    let next_stage = if active < n_slots { "downloading" } else { "queued" };
+    let next_stage = if active < n_slots {
+        "downloading"
+    } else {
+        "queued"
+    };
     {
         let conn = db.lock().expect("db mutex poisoned");
         persistence::set_stage(&conn, item_id, next_stage)?;
@@ -342,7 +365,14 @@ pub fn resume_item(
     if next_stage == "downloading" {
         let mut resumed = item;
         resumed.stage = "downloading".to_string();
-        spawn_and_refill(Arc::clone(&db), resumed, binaries, emitter, n_slots, registry);
+        spawn_and_refill(
+            Arc::clone(&db),
+            resumed,
+            binaries,
+            emitter,
+            n_slots,
+            registry,
+        );
     }
     let conn = db.lock().expect("db mutex poisoned");
     persistence::get_item(&conn, item_id)
@@ -484,7 +514,15 @@ pub async fn bulk_action(
     let mut updated = Vec::new();
     for id in ids {
         let result = match verb {
-            BulkVerb::Pause => pause_item(Arc::clone(&db), Arc::clone(&emitter), Arc::clone(&registry), id).await,
+            BulkVerb::Pause => {
+                pause_item(
+                    Arc::clone(&db),
+                    Arc::clone(&emitter),
+                    Arc::clone(&registry),
+                    id,
+                )
+                .await
+            }
             BulkVerb::Resume => resume_item(
                 Arc::clone(&db),
                 Arc::clone(&emitter),
@@ -667,7 +705,8 @@ mod tests {
 
         // `--flat-playlist` on a lone video returns no `entries` key at all —
         // reuse the fake binary path but with a title-only script.
-        let path = std::env::temp_dir().join(format!("begirex-fake-ytdlp-solo-{}", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("begirex-fake-ytdlp-solo-{}", std::process::id()));
         std::fs::write(&path, "#!/bin/sh\necho '{\"title\":\"Solo video\"}'\n").unwrap();
         #[cfg(unix)]
         {

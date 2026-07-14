@@ -57,7 +57,10 @@ pub fn set_binary_path(
         });
     }
     let which = Which::parse(&request.which).ok_or_else(|| AppError::Validation {
-        message: format!("unknown binary '{}', expected 'ytdlp' or 'ffmpeg'", request.which),
+        message: format!(
+            "unknown binary '{}', expected 'ytdlp' or 'ffmpeg'",
+            request.which
+        ),
     })?;
 
     let conn = state.db.lock().expect("db mutex poisoned");
@@ -87,7 +90,10 @@ pub async fn download_binary(
     request: DownloadBinaryRequest,
 ) -> Result<BinaryStatus, AppError> {
     let which = Which::parse(&request.which).ok_or_else(|| AppError::Validation {
-        message: format!("unknown binary '{}', expected 'ytdlp' or 'ffmpeg'", request.which),
+        message: format!(
+            "unknown binary '{}', expected 'ytdlp' or 'ffmpeg'",
+            request.which
+        ),
     })?;
     let app_data_dir = app.path().app_data_dir().map_err(|e| AppError::IoError {
         message: format!("could not resolve app data dir: {e}"),
@@ -217,7 +223,9 @@ impl Emitter for TauriEmitter {
     }
 
     fn emit_item_removed(&self, item_id: i64) {
-        let _ = self.app.emit("item_removed", ItemRemovedPayload { id: item_id });
+        let _ = self
+            .app
+            .emit("item_removed", ItemRemovedPayload { id: item_id });
     }
 
     // Only tails while a detail drawer is open for this item (ARCHITECTURE
@@ -245,10 +253,9 @@ impl Emitter for TauriEmitter {
     }
 
     fn emit_binary_health(&self, which: &str, found: bool, path: Option<&str>) {
-        let _ = self.app.emit(
-            "binary_health",
-            BinaryHealthPayload { which, found, path },
-        );
+        let _ = self
+            .app
+            .emit("binary_health", BinaryHealthPayload { which, found, path });
     }
 }
 
@@ -361,7 +368,14 @@ pub async fn add_download(
             .or_else(|| settings.global_proxy.clone());
         let n_slots = settings.default_concurrency;
 
-        (ytdlp_path, ffmpeg_path, output_dir, output_template, proxy, n_slots)
+        (
+            ytdlp_path,
+            ffmpeg_path,
+            output_dir,
+            output_template,
+            proxy,
+            n_slots,
+        )
     };
 
     let db = Arc::clone(&state.db);
@@ -424,13 +438,27 @@ pub struct OkResponse {
 }
 
 #[tauri::command]
-pub async fn pause_item(app: AppHandle, state: State<'_, AppState>, request: GetItemRequest) -> Result<Item, AppError> {
+pub async fn pause_item(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: GetItemRequest,
+) -> Result<Item, AppError> {
     let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter::new(app));
-    queue_manager::pause_item(Arc::clone(&state.db), emitter, Arc::clone(&state.registry), request.id).await
+    queue_manager::pause_item(
+        Arc::clone(&state.db),
+        emitter,
+        Arc::clone(&state.registry),
+        request.id,
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn resume_item(app: AppHandle, state: State<AppState>, request: GetItemRequest) -> Result<Item, AppError> {
+pub fn resume_item(
+    app: AppHandle,
+    state: State<AppState>,
+    request: GetItemRequest,
+) -> Result<Item, AppError> {
     let (binaries, n_slots) = {
         let conn = state.db.lock().expect("db mutex poisoned");
         resolve_runtime(&conn)?
@@ -447,7 +475,11 @@ pub fn resume_item(app: AppHandle, state: State<AppState>, request: GetItemReque
 }
 
 #[tauri::command]
-pub async fn cancel_item(app: AppHandle, state: State<'_, AppState>, request: GetItemRequest) -> Result<Item, AppError> {
+pub async fn cancel_item(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: GetItemRequest,
+) -> Result<Item, AppError> {
     let (binaries, n_slots) = {
         let conn = state.db.lock().expect("db mutex poisoned");
         resolve_runtime(&conn)?
@@ -465,7 +497,11 @@ pub async fn cancel_item(app: AppHandle, state: State<'_, AppState>, request: Ge
 }
 
 #[tauri::command]
-pub async fn remove_item(app: AppHandle, state: State<'_, AppState>, request: GetItemRequest) -> Result<OkResponse, AppError> {
+pub async fn remove_item(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: GetItemRequest,
+) -> Result<OkResponse, AppError> {
     let (binaries, n_slots) = {
         let conn = state.db.lock().expect("db mutex poisoned");
         resolve_runtime(&conn)?
@@ -484,7 +520,11 @@ pub async fn remove_item(app: AppHandle, state: State<'_, AppState>, request: Ge
 }
 
 #[tauri::command]
-pub fn retry_item(app: AppHandle, state: State<AppState>, request: GetItemRequest) -> Result<Item, AppError> {
+pub fn retry_item(
+    app: AppHandle,
+    state: State<AppState>,
+    request: GetItemRequest,
+) -> Result<Item, AppError> {
     let (binaries, n_slots) = {
         let conn = state.db.lock().expect("db mutex poisoned");
         resolve_runtime(&conn)?
@@ -507,7 +547,10 @@ pub struct ReorderItemRequest {
 }
 
 #[tauri::command]
-pub fn reorder_item(state: State<AppState>, request: ReorderItemRequest) -> Result<OkResponse, AppError> {
+pub fn reorder_item(
+    state: State<AppState>,
+    request: ReorderItemRequest,
+) -> Result<OkResponse, AppError> {
     queue_manager::reorder_item(Arc::clone(&state.db), request.id, request.new_position)?;
     Ok(OkResponse { ok: true })
 }
@@ -524,7 +567,11 @@ pub struct BulkActionResponse {
 }
 
 #[tauri::command]
-pub async fn bulk_action(app: AppHandle, state: State<'_, AppState>, request: BulkActionRequest) -> Result<BulkActionResponse, AppError> {
+pub async fn bulk_action(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: BulkActionRequest,
+) -> Result<BulkActionResponse, AppError> {
     let verb = match request.action.as_str() {
         "pause" => BulkVerb::Pause,
         "resume" => BulkVerb::Resume,
@@ -565,7 +612,11 @@ pub struct SetConcurrencyResponse {
 }
 
 #[tauri::command]
-pub fn set_concurrency(app: AppHandle, state: State<AppState>, request: SetConcurrencyRequest) -> Result<SetConcurrencyResponse, AppError> {
+pub fn set_concurrency(
+    app: AppHandle,
+    state: State<AppState>,
+    request: SetConcurrencyRequest,
+) -> Result<SetConcurrencyResponse, AppError> {
     if request.n < 1 {
         return Err(AppError::Validation {
             message: "n must be >= 1".into(),
@@ -592,7 +643,10 @@ pub struct ListItemsRequest {
 }
 
 #[tauri::command]
-pub fn list_items(state: State<AppState>, request: ListItemsRequest) -> Result<Vec<Item>, AppError> {
+pub fn list_items(
+    state: State<AppState>,
+    request: ListItemsRequest,
+) -> Result<Vec<Item>, AppError> {
     let conn = state.db.lock().expect("db mutex poisoned");
     persistence::list_items(&conn, request.filter.as_deref())
 }
@@ -634,7 +688,10 @@ pub struct WatchLogRequest {
 /// on open/close of its log disclosure.
 #[tauri::command]
 pub fn watch_log(state: State<AppState>, request: WatchLogRequest) -> Result<OkResponse, AppError> {
-    let mut watchers = state.log_watchers.lock().expect("log watchers mutex poisoned");
+    let mut watchers = state
+        .log_watchers
+        .lock()
+        .expect("log watchers mutex poisoned");
     if request.on {
         watchers.insert(request.id);
     } else {
@@ -686,7 +743,8 @@ pub async fn probe_formats(
         (ytdlp_path, proxy)
     };
 
-    let result = crate::engine_supervisor::probe(&ytdlp_path, &request.url, proxy.as_deref()).await?;
+    let result =
+        crate::engine_supervisor::probe(&ytdlp_path, &request.url, proxy.as_deref()).await?;
     Ok(ProbeFormatsResponse {
         title: result.title,
         formats: result.formats,
@@ -791,14 +849,20 @@ pub struct PresetListResponse {
 }
 
 #[tauri::command]
-pub fn delete_preset(state: State<AppState>, request: GetItemRequest) -> Result<PresetListResponse, AppError> {
+pub fn delete_preset(
+    state: State<AppState>,
+    request: GetItemRequest,
+) -> Result<PresetListResponse, AppError> {
     let conn = state.db.lock().expect("db mutex poisoned");
     let presets = preset_service::delete_preset(&conn, request.id)?;
     Ok(PresetListResponse { presets })
 }
 
 #[tauri::command]
-pub fn set_default_preset(state: State<AppState>, request: GetItemRequest) -> Result<PresetListResponse, AppError> {
+pub fn set_default_preset(
+    state: State<AppState>,
+    request: GetItemRequest,
+) -> Result<PresetListResponse, AppError> {
     let conn = state.db.lock().expect("db mutex poisoned");
     let presets = preset_service::set_default_preset(&conn, request.id)?;
     Ok(PresetListResponse { presets })
@@ -852,7 +916,10 @@ pub fn open_path(request: OpenPathRequest) -> Result<OkResponse, AppError> {
     match result {
         Ok(status) if status.success() => Ok(OkResponse { ok: true }),
         Ok(status) => Err(AppError::IoError {
-            message: format!("failed to open '{}': exited with {status}", target.display()),
+            message: format!(
+                "failed to open '{}': exited with {status}",
+                target.display()
+            ),
         }),
         Err(err) => Err(AppError::IoError {
             message: format!("failed to open '{}': {err}", target.display()),

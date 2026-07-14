@@ -99,10 +99,14 @@ pub fn run() {
                     .path()
                     .resource_dir()
                     .expect("resource dir must be resolvable in a bundled build");
-                let ytdlp_path =
-                    binary_manager::bundled_binary_path(&resource_dir, binary_manager::Which::Ytdlp);
-                let ffmpeg_path =
-                    binary_manager::bundled_binary_path(&resource_dir, binary_manager::Which::Ffmpeg);
+                let ytdlp_path = binary_manager::bundled_binary_path(
+                    &resource_dir,
+                    binary_manager::Which::Ytdlp,
+                );
+                let ffmpeg_path = binary_manager::bundled_binary_path(
+                    &resource_dir,
+                    binary_manager::Which::Ffmpeg,
+                );
                 persistence::seed_bundled_binaries(
                     &conn,
                     &ytdlp_path.to_string_lossy(),
@@ -149,8 +153,12 @@ pub fn run() {
                     _ => return,
                 };
                 let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter::new(app_handle));
-                let binaries = BinaryPaths { ytdlp_path, ffmpeg_path };
-                let _ = queue_manager::reconcile_and_resume(db, emitter, binaries, n_slots, registry);
+                let binaries = BinaryPaths {
+                    ytdlp_path,
+                    ffmpeg_path,
+                };
+                let _ =
+                    queue_manager::reconcile_and_resume(db, emitter, binaries, n_slots, registry);
             });
 
             Ok(())

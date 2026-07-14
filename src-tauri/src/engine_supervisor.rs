@@ -102,7 +102,11 @@ pub async fn cancel(registry: &ActiveRegistry, item_id: i64) -> Result<bool, App
     Ok(killed)
 }
 
-async fn kill(registry: &ActiveRegistry, item_id: i64, reason: KillReason) -> Result<bool, AppError> {
+async fn kill(
+    registry: &ActiveRegistry,
+    item_id: i64,
+    reason: KillReason,
+) -> Result<bool, AppError> {
     let entry = registry.lock().unwrap().get(&item_id).cloned();
     let Some(entry) = entry else {
         return Ok(false);
@@ -405,7 +409,13 @@ async fn run_download_inner(
 
     if status.success() {
         let conn = db.lock().expect("db mutex poisoned");
-        persistence::finish_item(&conn, item_id, "completed", resolved_output_path.as_deref(), None)?;
+        persistence::finish_item(
+            &conn,
+            item_id,
+            "completed",
+            resolved_output_path.as_deref(),
+            None,
+        )?;
         drop(conn);
         emitter.emit_stage_changed(item_id, "completed", None);
     } else {
@@ -483,7 +493,11 @@ struct YtDlpProbeJson {
 /// `-J` run", §7.2 `probe_formats`). A one-shot call, not a supervised
 /// download, so unlike `run_download` it doesn't register in `ActiveRegistry`
 /// — nothing here can be paused/cancelled by T6.
-pub async fn probe(ytdlp_path: &str, url: &str, proxy: Option<&str>) -> Result<ProbeResult, AppError> {
+pub async fn probe(
+    ytdlp_path: &str,
+    url: &str,
+    proxy: Option<&str>,
+) -> Result<ProbeResult, AppError> {
     let mut cmd = Command::new(ytdlp_path);
     cmd.arg("-J").arg("--no-playlist");
     if let Some(proxy) = proxy.filter(|p| !p.is_empty()) {
@@ -567,7 +581,11 @@ pub struct PlaylistExpansion {
 /// lone video still round-trips through here (yt-dlp returns it with no
 /// `entries` key, or a single-element one) so the expand-then-add path in
 /// `queue_manager` stays uniform for both shapes.
-pub async fn expand_playlist(ytdlp_path: &str, url: &str, proxy: Option<&str>) -> Result<PlaylistExpansion, AppError> {
+pub async fn expand_playlist(
+    ytdlp_path: &str,
+    url: &str,
+    proxy: Option<&str>,
+) -> Result<PlaylistExpansion, AppError> {
     let mut cmd = Command::new(ytdlp_path);
     cmd.arg("-J").arg("--flat-playlist");
     if let Some(proxy) = proxy.filter(|p| !p.is_empty()) {
@@ -596,10 +614,11 @@ pub async fn expand_playlist(ytdlp_path: &str, url: &str, proxy: Option<&str>) -
 /// so it's unit-testable without spawning a real process, same pattern as
 /// `map_format`/`probe`).
 fn parse_playlist_json(raw: &str, submitted_url: &str) -> Result<PlaylistExpansion, AppError> {
-    let parsed: YtDlpPlaylistJson = serde_json::from_str(raw).map_err(|e| AppError::ProbeFailed {
-        message: format!("could not parse yt-dlp output: {e}"),
-        stderr: None,
-    })?;
+    let parsed: YtDlpPlaylistJson =
+        serde_json::from_str(raw).map_err(|e| AppError::ProbeFailed {
+            message: format!("could not parse yt-dlp output: {e}"),
+            stderr: None,
+        })?;
 
     match parsed.entries {
         Some(raw_entries) if raw_entries.len() > 1 => {
@@ -611,14 +630,20 @@ fn parse_playlist_json(raw: &str, submitted_url: &str) -> Result<PlaylistExpansi
                 .into_iter()
                 .filter_map(|e| {
                     let url = e.webpage_url.or(e.url)?;
-                    Some(PlaylistEntry { url, title: e.title })
+                    Some(PlaylistEntry {
+                        url,
+                        title: e.title,
+                    })
                 })
                 .collect();
             let playlist_id = parsed
                 .id
                 .or(parsed.webpage_url)
                 .or_else(|| Some(submitted_url.to_string()));
-            Ok(PlaylistExpansion { playlist_id, entries })
+            Ok(PlaylistExpansion {
+                playlist_id,
+                entries,
+            })
         }
         _ => Ok(PlaylistExpansion {
             playlist_id: None,
@@ -788,10 +813,11 @@ mod tests {
         fn emit_item_removed(&self, _item_id: i64) {}
         fn emit_log_line(&self, _item_id: i64, _stream: &str, _line: &str) {}
         fn emit_binary_health(&self, which: &str, found: bool, path: Option<&str>) {
-            self.binary_health_events
-                .lock()
-                .unwrap()
-                .push((which.to_string(), found, path.map(|s| s.to_string())));
+            self.binary_health_events.lock().unwrap().push((
+                which.to_string(),
+                found,
+                path.map(|s| s.to_string()),
+            ));
         }
     }
 
@@ -842,7 +868,13 @@ mod tests {
 
     #[test]
     fn map_format_prefers_vcodec_and_explicit_resolution_for_video() {
-        let f = ytdlp_format(Some("avc1"), Some("none"), Some("1920x1080"), Some(1920), Some(1080));
+        let f = ytdlp_format(
+            Some("avc1"),
+            Some("none"),
+            Some("1920x1080"),
+            Some(1920),
+            Some(1080),
+        );
         let mapped = map_format(f);
         assert_eq!(mapped.resolution.as_deref(), Some("1920x1080"));
         assert_eq!(mapped.codec.as_deref(), Some("avc1"));
@@ -892,7 +924,9 @@ mod tests {
             .unwrap_err();
         match err {
             AppError::InvalidFormatExpr { stderr, .. } => {
-                assert!(stderr.unwrap_or_default().contains("Invalid format specification"));
+                assert!(stderr
+                    .unwrap_or_default()
+                    .contains("Invalid format specification"));
             }
             other => panic!("expected InvalidFormatExpr, got {other:?}"),
         }
@@ -900,10 +934,22 @@ mod tests {
 
     #[test]
     fn map_format_marks_has_audio_false_for_video_only_and_true_for_muxed() {
-        let video_only = ytdlp_format(Some("avc1"), Some("none"), Some("1920x1080"), Some(1920), Some(1080));
+        let video_only = ytdlp_format(
+            Some("avc1"),
+            Some("none"),
+            Some("1920x1080"),
+            Some(1920),
+            Some(1080),
+        );
         assert!(!map_format(video_only).has_audio);
 
-        let muxed = ytdlp_format(Some("avc1"), Some("mp4a"), Some("1920x1080"), Some(1920), Some(1080));
+        let muxed = ytdlp_format(
+            Some("avc1"),
+            Some("mp4a"),
+            Some("1920x1080"),
+            Some(1920),
+            Some(1080),
+        );
         assert!(map_format(muxed).has_audio);
 
         let audio_only = ytdlp_format(Some("none"), Some("aac"), None, None, None);
@@ -921,12 +967,19 @@ mod tests {
                 {"url": "https://example.invalid/watch?v=b", "title": "B"}
             ]
         }"#;
-        let expansion = parse_playlist_json(raw, "https://example.invalid/playlist?list=PL123").unwrap();
+        let expansion =
+            parse_playlist_json(raw, "https://example.invalid/playlist?list=PL123").unwrap();
         assert_eq!(expansion.playlist_id, Some("PL123".to_string()));
         assert_eq!(expansion.entries.len(), 2);
-        assert_eq!(expansion.entries[0].url, "https://example.invalid/watch?v=a");
+        assert_eq!(
+            expansion.entries[0].url,
+            "https://example.invalid/watch?v=a"
+        );
         assert_eq!(expansion.entries[0].title, Some("A".to_string()));
-        assert_eq!(expansion.entries[1].url, "https://example.invalid/watch?v=b");
+        assert_eq!(
+            expansion.entries[1].url,
+            "https://example.invalid/watch?v=b"
+        );
     }
 
     #[test]
@@ -935,7 +988,10 @@ mod tests {
         let expansion = parse_playlist_json(raw, "https://example.invalid/watch?v=x").unwrap();
         assert_eq!(expansion.playlist_id, None);
         assert_eq!(expansion.entries.len(), 1);
-        assert_eq!(expansion.entries[0].url, "https://example.invalid/watch?v=x");
+        assert_eq!(
+            expansion.entries[0].url,
+            "https://example.invalid/watch?v=x"
+        );
         assert_eq!(expansion.entries[0].title, Some("Solo video".to_string()));
     }
 
@@ -945,7 +1001,8 @@ mod tests {
         // one) should not get a `playlist_id` — matches "expansion only fires
         // for >1 entries" (T19-AC1).
         let raw = r#"{"id": "PL1", "entries": [{"url": "https://example.invalid/watch?v=a", "title": "A"}]}"#;
-        let expansion = parse_playlist_json(raw, "https://example.invalid/playlist?list=PL1").unwrap();
+        let expansion =
+            parse_playlist_json(raw, "https://example.invalid/playlist?list=PL1").unwrap();
         assert_eq!(expansion.playlist_id, None);
         assert_eq!(expansion.entries.len(), 1);
     }
@@ -960,10 +1017,17 @@ mod tests {
                 {"url": "https://example.invalid/watch?v=c", "title": "C"}
             ]
         }"#;
-        let expansion = parse_playlist_json(raw, "https://example.invalid/playlist?list=PL9").unwrap();
+        let expansion =
+            parse_playlist_json(raw, "https://example.invalid/playlist?list=PL9").unwrap();
         assert_eq!(expansion.entries.len(), 2);
-        assert_eq!(expansion.entries[0].url, "https://example.invalid/watch?v=a");
-        assert_eq!(expansion.entries[1].url, "https://example.invalid/watch?v=c");
+        assert_eq!(
+            expansion.entries[0].url,
+            "https://example.invalid/watch?v=a"
+        );
+        assert_eq!(
+            expansion.entries[1].url,
+            "https://example.invalid/watch?v=c"
+        );
     }
 
     // --- T16: pre-spawn health check -----------------------------------------
@@ -1041,7 +1105,10 @@ mod tests {
         assert!(stage_events.contains(&(item.id, "queued".to_string(), None)));
 
         let health_events = emitter.binary_health_events.lock().unwrap();
-        assert_eq!(health_events.as_slice(), &[("ytdlp".to_string(), false, None)]);
+        assert_eq!(
+            health_events.as_slice(),
+            &[("ytdlp".to_string(), false, None)]
+        );
 
         assert!(registry.lock().unwrap().is_empty());
     }

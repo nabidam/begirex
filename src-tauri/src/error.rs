@@ -16,10 +16,16 @@ pub enum AppError {
     BinaryDownloadFailed { message: String },
 
     #[error("{message}")]
-    ProbeFailed { message: String, stderr: Option<String> },
+    ProbeFailed {
+        message: String,
+        stderr: Option<String>,
+    },
 
     #[error("{message}")]
-    InvalidFormatExpr { message: String, stderr: Option<String> },
+    InvalidFormatExpr {
+        message: String,
+        stderr: Option<String>,
+    },
 
     #[error("{message}")]
     DuplicateUrl { message: String },
@@ -34,7 +40,10 @@ pub enum AppError {
     DbError { message: String },
 
     #[error("{message}")]
-    ProcessError { message: String, stderr: Option<String> },
+    ProcessError {
+        message: String,
+        stderr: Option<String>,
+    },
 
     #[error("{message}")]
     Validation { message: String },

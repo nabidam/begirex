@@ -27,7 +27,10 @@ fn global_proxy_survives_a_fresh_connection_open() {
         },
     )
     .unwrap();
-    assert_eq!(updated.global_proxy.as_deref(), Some("http://127.0.0.1:8080"));
+    assert_eq!(
+        updated.global_proxy.as_deref(),
+        Some("http://127.0.0.1:8080")
+    );
     drop(conn);
 
     // Fresh connection to the same file — simulates a process restart.
@@ -35,7 +38,10 @@ fn global_proxy_survives_a_fresh_connection_open() {
     // the value just written.
     let conn2 = persistence::open_and_init(&db_path, "/tmp/downloads").unwrap();
     let fetched = get_settings(&conn2).unwrap();
-    assert_eq!(fetched.global_proxy.as_deref(), Some("http://127.0.0.1:8080"));
+    assert_eq!(
+        fetched.global_proxy.as_deref(),
+        Some("http://127.0.0.1:8080")
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }

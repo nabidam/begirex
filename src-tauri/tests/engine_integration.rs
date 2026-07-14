@@ -277,10 +277,10 @@ async fn probe_returns_formats_for_a_real_media_url() {
         result.formats.len()
     );
     assert!(result.formats.iter().any(|f| f.filesize.is_some()));
-    assert!(result.formats.iter().any(|f| f
-        .resolution
-        .as_deref()
-        .is_some_and(|r| r.contains('x'))));
+    assert!(result
+        .formats
+        .iter()
+        .any(|f| f.resolution.as_deref().is_some_and(|r| r.contains('x'))));
 }
 
 #[tokio::test]
@@ -295,7 +295,10 @@ async fn probe_surfaces_real_stderr_for_an_unreachable_url() {
     match err {
         begirex_lib::error::AppError::ProbeFailed { stderr, .. } => {
             let stderr = stderr.expect("ProbeFailed should carry stderr");
-            assert!(!stderr.trim().is_empty(), "expected non-empty yt-dlp stderr");
+            assert!(
+                !stderr.trim().is_empty(),
+                "expected non-empty yt-dlp stderr"
+            );
         }
         other => panic!("expected ProbeFailed, got {other:?}"),
     }

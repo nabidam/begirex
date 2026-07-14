@@ -45,7 +45,10 @@ fn set_binary_path_rejects_bogus_path_and_leaves_settings_unchanged() {
     ));
 
     let after = persistence::get_setting(&conn, "ytdlp_path").unwrap();
-    assert_eq!(after, None, "settings must be unchanged after a rejected path");
+    assert_eq!(
+        after, None,
+        "settings must be unchanged after a rejected path"
+    );
 }
 
 #[test]

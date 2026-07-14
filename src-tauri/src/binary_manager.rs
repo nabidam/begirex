@@ -224,7 +224,9 @@ fn bin_dir(app_data_dir: &Path) -> PathBuf {
 fn download_url(which: Which) -> &'static str {
     match which {
         Which::Ytdlp => "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp",
-        Which::Ffmpeg => "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz",
+        Which::Ffmpeg => {
+            "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+        }
     }
 }
 #[cfg(target_os = "macos")]
@@ -243,7 +245,9 @@ fn download_url(which: Which) -> &'static str {
 }
 
 fn download_failed(message: impl Into<String>) -> AppError {
-    AppError::BinaryDownloadFailed { message: message.into() }
+    AppError::BinaryDownloadFailed {
+        message: message.into(),
+    }
 }
 
 /// Streams `url` into memory, reporting 0..=100 via `on_progress` as bytes
@@ -258,7 +262,10 @@ async fn stream_download(
         .await
         .map_err(|e| download_failed(format!("failed to fetch {url}: {e}")))?;
     if !response.status().is_success() {
-        return Err(download_failed(format!("download failed: HTTP {}", response.status())));
+        return Err(download_failed(format!(
+            "download failed: HTTP {}",
+            response.status()
+        )));
     }
     let total = response.content_length().filter(|&n| n > 0);
 
@@ -284,14 +291,21 @@ fn extract_named_from_zip(archive_bytes: &[u8], names: &[&str]) -> Result<Vec<u8
         let mut entry = archive
             .by_index(i)
             .map_err(|e| download_failed(format!("failed to read archive entry: {e}")))?;
-        let base_name = entry.name().rsplit('/').next().unwrap_or_default().to_string();
+        let base_name = entry
+            .name()
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .to_string();
         if names.contains(&base_name.as_str()) {
             let mut out = Vec::new();
             std::io::copy(&mut entry, &mut out).map_err(|e| download_failed(e.to_string()))?;
             return Ok(out);
         }
     }
-    Err(download_failed("expected binary not found in downloaded archive"))
+    Err(download_failed(
+        "expected binary not found in downloaded archive",
+    ))
 }
 
 /// Scans a `.tar.xz` archive for the first entry whose base name is in
@@ -303,7 +317,8 @@ fn extract_named_from_tar_xz(archive_bytes: &[u8], names: &[&str]) -> Result<Vec
         .entries()
         .map_err(|e| download_failed(format!("failed to read archive: {e}")))?;
     for entry in entries {
-        let mut entry = entry.map_err(|e| download_failed(format!("failed to read archive entry: {e}")))?;
+        let mut entry =
+            entry.map_err(|e| download_failed(format!("failed to read archive entry: {e}")))?;
         let base_name = entry
             .path()
             .map_err(|e| download_failed(e.to_string()))?
@@ -317,7 +332,9 @@ fn extract_named_from_tar_xz(archive_bytes: &[u8], names: &[&str]) -> Result<Vec
             return Ok(out);
         }
     }
-    Err(download_failed("expected binary not found in downloaded archive"))
+    Err(download_failed(
+        "expected binary not found in downloaded archive",
+    ))
 }
 
 #[cfg(target_os = "linux")]
@@ -348,20 +365,30 @@ pub async fn download_to_disk(
     };
 
     let dir = bin_dir(app_data_dir);
-    std::fs::create_dir_all(&dir).map_err(|e| AppError::IoError { message: e.to_string() })?;
+    std::fs::create_dir_all(&dir).map_err(|e| AppError::IoError {
+        message: e.to_string(),
+    })?;
     let dest = dir.join(which.binary_file_name());
-    let mut file = std::fs::File::create(&dest).map_err(|e| AppError::IoError { message: e.to_string() })?;
-    file.write_all(&bytes).map_err(|e| AppError::IoError { message: e.to_string() })?;
+    let mut file = std::fs::File::create(&dest).map_err(|e| AppError::IoError {
+        message: e.to_string(),
+    })?;
+    file.write_all(&bytes).map_err(|e| AppError::IoError {
+        message: e.to_string(),
+    })?;
     drop(file);
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = std::fs::metadata(&dest)
-            .map_err(|e| AppError::IoError { message: e.to_string() })?
+            .map_err(|e| AppError::IoError {
+                message: e.to_string(),
+            })?
             .permissions();
         perms.set_mode(0o755);
-        std::fs::set_permissions(&dest, perms).map_err(|e| AppError::IoError { message: e.to_string() })?;
+        std::fs::set_permissions(&dest, perms).map_err(|e| AppError::IoError {
+            message: e.to_string(),
+        })?;
     }
 
     Ok(dest.to_string_lossy().to_string())
@@ -380,7 +407,10 @@ mod tests {
         assert!(matches!(err, AppError::BinaryNotFound { .. }));
 
         assert_eq!(persistence::get_setting(&conn, "ytdlp_path").unwrap(), None);
-        assert_eq!(persistence::get_setting(&conn, "ytdlp_version").unwrap(), None);
+        assert_eq!(
+            persistence::get_setting(&conn, "ytdlp_version").unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -440,7 +470,12 @@ mod tests {
     fn bundled_binary_path_joins_resource_dir_bin_and_file_name() {
         let resource_dir = Path::new("/opt/begirex/resources");
         let path = bundled_binary_path(resource_dir, Which::Ytdlp);
-        assert_eq!(path, resource_dir.join("bin").join(Which::Ytdlp.binary_file_name()));
+        assert_eq!(
+            path,
+            resource_dir
+                .join("bin")
+                .join(Which::Ytdlp.binary_file_name())
+        );
     }
 
     #[test]
@@ -453,7 +488,9 @@ mod tests {
     fn fabricate_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         for (name, contents) in entries {
-            writer.start_file(*name, zip::write::FileOptions::default()).unwrap();
+            writer
+                .start_file(*name, zip::write::FileOptions::default())
+                .unwrap();
             writer.write_all(contents).unwrap();
         }
         writer.finish().unwrap().into_inner()
@@ -475,7 +512,10 @@ mod tests {
     fn extract_named_from_zip_finds_binary_regardless_of_nested_folder() {
         let archive = fabricate_zip(&[
             ("ffmpeg-7.0.2-essentials/README.txt", b"ignore me"),
-            ("ffmpeg-7.0.2-essentials/bin/ffmpeg.exe", b"fake ffmpeg bytes"),
+            (
+                "ffmpeg-7.0.2-essentials/bin/ffmpeg.exe",
+                b"fake ffmpeg bytes",
+            ),
         ]);
         let extracted = extract_named_from_zip(&archive, &["ffmpeg", "ffmpeg.exe"]).unwrap();
         assert_eq!(extracted, b"fake ffmpeg bytes");
@@ -522,7 +562,9 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("begirex-dl-test-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
 
-        let path = download_to_disk(&tmp, Which::Ffmpeg, |_percent| {}).await.unwrap();
+        let path = download_to_disk(&tmp, Which::Ffmpeg, |_percent| {})
+            .await
+            .unwrap();
         assert!(probe_version(&path).is_some());
 
         let _ = std::fs::remove_dir_all(&tmp);

@@ -343,8 +343,14 @@ async fn kill_9_mid_download_then_reconcile_resumes_from_partial_bytes() {
         ytdlp_path: ytdlp_path.clone(),
         ffmpeg_path: ffmpeg_path.clone(),
     };
-    queue_manager::reconcile_and_resume(Arc::clone(&db), Arc::clone(&emitter), binaries, 2, empty_registry())
-        .unwrap();
+    queue_manager::reconcile_and_resume(
+        Arc::clone(&db),
+        Arc::clone(&emitter),
+        binaries,
+        2,
+        empty_registry(),
+    )
+    .unwrap();
 
     // Reconcile resumes it (spawns a fresh yt-dlp process with -c) and it
     // completes, ending at `completed` with a total >= what was already
