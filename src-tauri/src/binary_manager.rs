@@ -414,28 +414,27 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn set_path_persists_real_binary_and_detect_finds_it() {
         let conn = Connection::open_in_memory().unwrap();
         persistence::migrate_for_test(&conn);
 
-        // `sh` responds to `--version`? No — use a real always-present binary
-        // that supports --version: `cat` does not, but `sh` prints usage on
-        // exit != 0. Use `true`'s sibling: prefer a script fixture instead —
-        // see tests/binary_detection.rs for the fabricated-binary scenario
-        // that exercises this end to end with a real spawned "binary".
-        // Here we just check the plumbing with a real installed tool that
-        // supports --version reliably across distros: `env --version`.
-        let status = set_path(&conn, &Which::Ytdlp, "/usr/bin/env").unwrap();
+        // `/bin/echo` is present on the Unix platforms we test and accepts
+        // either version flag, producing a non-empty version line. The test
+        // exercises the persistence/detection plumbing; a fabricated yt-dlp
+        // fixture covers binary-specific behavior in `tests/binary_detection.rs`.
+        let status = set_path(&conn, &Which::Ytdlp, "/bin/echo").unwrap();
         assert!(status.found);
-        assert_eq!(status.path.as_deref(), Some("/usr/bin/env"));
+        assert_eq!(status.path.as_deref(), Some("/bin/echo"));
         assert!(status.version.is_some());
 
         let detected = detect(&conn, &Which::Ytdlp).unwrap();
         assert!(detected.found);
-        assert_eq!(detected.path.as_deref(), Some("/usr/bin/env"));
+        assert_eq!(detected.path.as_deref(), Some("/bin/echo"));
     }
 
     #[test]
+    #[cfg(unix)]
     fn bundled_seeded_path_is_detected_without_any_path_search() {
         // T20 AC1's actual mechanism end to end: a resource dir with a
         // runnable binary at the `bundled_binary_path` location, seeded via
@@ -452,11 +451,11 @@ mod tests {
         // involved), not the `<resource_dir>/bin/<name>` joining, which
         // `bundled_binary_path_joins_resource_dir_bin_and_file_name` above
         // already covers.
-        persistence::seed_bundled_binaries(&conn, "/usr/bin/env", "/usr/bin/env").unwrap();
+        persistence::seed_bundled_binaries(&conn, "/bin/echo", "/bin/echo").unwrap();
 
         let detected = detect(&conn, &Which::Ytdlp).unwrap();
         assert!(detected.found);
-        assert_eq!(detected.path.as_deref(), Some("/usr/bin/env"));
+        assert_eq!(detected.path.as_deref(), Some("/bin/echo"));
         assert!(detected.version.is_some());
     }
 

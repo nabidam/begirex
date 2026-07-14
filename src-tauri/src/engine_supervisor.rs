@@ -911,6 +911,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires yt-dlp; covered by the ignored real-process integration suite"]
     async fn dry_parse_format_accepts_valid_expression() {
         dry_parse_format(&ytdlp_path(), "bv*[height<=2160]+ba/b")
             .await
@@ -918,6 +919,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires yt-dlp; covered by the ignored real-process integration suite"]
     async fn dry_parse_format_rejects_malformed_expression() {
         let err = dry_parse_format(&ytdlp_path(), "bv*[[[garbage")
             .await
