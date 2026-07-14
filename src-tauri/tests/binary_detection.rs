@@ -4,6 +4,8 @@
 //! fake "binary" script when neither is available (no network/real yt-dlp
 //! required, so these are NOT `#[ignore]`).
 
+#![cfg(unix)]
+
 use begirex_lib::binary_manager::{detect, set_path, Which};
 use begirex_lib::persistence;
 use std::fs;
