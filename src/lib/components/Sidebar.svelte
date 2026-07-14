@@ -24,11 +24,18 @@
   import Package from "lucide-svelte/icons/package";
   import SettingsIcon from "lucide-svelte/icons/settings";
 
-  let { items, onAdd, onOpenPresets, onOpenSettings, collapsed, addDisabled = false }: {
+  let { items, onAdd, onOpenPresets, onOpenSettings, onNavigateQueue, activeView = "queue", collapsed, addDisabled = false }: {
     items: Item[];
     onAdd: () => void;
     onOpenPresets: () => void;
     onOpenSettings: () => void;
+    // Return to the queue view (S2). Called whenever a status filter is
+    // clicked so picking a filter from S6/S7 lands back on the list.
+    onNavigateQueue: () => void;
+    // Which secondary view owns the main area, so the nav marks it active
+    // (weight + indicator, not color alone) — S2/S6/S7 are peers now, no
+    // longer scrim overlays.
+    activeView?: "queue" | "presets" | "settings";
     collapsed: boolean;
     addDisabled?: boolean;
   } = $props();
@@ -142,7 +149,7 @@
     <ul class="m-0 flex min-h-0 w-full flex-1 list-none flex-col gap-0.5 overflow-y-auto p-0">
       {#each STATUS_FILTERS as filter (filter)}
         {@const count = filtersStore.countFor(filter, items)}
-        {@const active = filtersStore.status === filter}
+        {@const active = activeView === "queue" && filtersStore.status === filter}
         {@const Icon = ICON[filter]}
         <li>
           <Tooltip.Root disabled={!collapsed}>
@@ -157,7 +164,10 @@
                     active ? "bg-accent text-accent-foreground font-bold" : "",
                     collapsed ? "justify-center px-0" : "justify-start gap-2",
                   )}
-                  onclick={() => filtersStore.setStatus(filter)}
+                  onclick={() => {
+                    filtersStore.setStatus(filter);
+                    onNavigateQueue();
+                  }}
                   aria-current={active ? "true" : undefined}
                   aria-label={`${LABEL[filter]}, ${count} ${count === 1 ? "download" : "downloads"}${
                     DESCRIPTION[filter] ? ` — ${DESCRIPTION[filter]}` : ""
@@ -185,8 +195,13 @@
               {...props}
               type="button"
               variant="ghost"
-              class={cn("w-full", collapsed ? "justify-center" : "justify-start gap-2")}
+              class={cn(
+                "w-full",
+                activeView === "presets" ? "bg-accent text-accent-foreground font-bold" : "",
+                collapsed ? "justify-center" : "justify-start gap-2",
+              )}
               onclick={onOpenPresets}
+              aria-current={activeView === "presets" ? "true" : undefined}
               aria-label="Presets"
             >
               <Package aria-hidden="true" />
@@ -204,8 +219,13 @@
               {...props}
               type="button"
               variant="ghost"
-              class={cn("w-full", collapsed ? "justify-center" : "justify-start gap-2")}
+              class={cn(
+                "w-full",
+                activeView === "settings" ? "bg-accent text-accent-foreground font-bold" : "",
+                collapsed ? "justify-center" : "justify-start gap-2",
+              )}
               onclick={onOpenSettings}
+              aria-current={activeView === "settings" ? "true" : undefined}
               aria-label="Settings, shortcut Control or Command comma"
             >
               <SettingsIcon aria-hidden="true" />

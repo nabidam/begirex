@@ -16,14 +16,14 @@
   import AddDownload from "./AddDownload.svelte";
   import Presets from "./Presets.svelte";
   import Settings from "./Settings.svelte";
-  import { Button } from "$lib/components/ui/button";
-  import X from "lucide-svelte/icons/x";
 
   let { onReRunOnboarding }: { onReRunOnboarding: () => void } = $props();
 
   let showAddDownload = $state(false);
-  let showPresets = $state(false);
-  let showSettings = $state(false);
+  // S2/S6/S7 are peer secondary views sharing the main area beside the
+  // persistent sidebar (UX.md S6/S7 "Secondary view", S2 ⇄ S6 ⇄ S7) — not
+  // scrim overlays over the shell. Add and DetailDrawer stay true overlays.
+  let activeView = $state<"queue" | "presets" | "settings">("queue");
   let innerWidth = $state(window.innerWidth);
 
   // DESIGN.md §6: rail collapses below ~1100px window width or by toggle.
@@ -53,7 +53,7 @@
   function handleKeydown(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key === ",") {
       e.preventDefault();
-      showSettings = true;
+      activeView = "settings";
     }
   }
 
@@ -69,85 +69,32 @@
   <Sidebar
     items={queueStore.items}
     {collapsed}
+    {activeView}
     onAdd={openAdd}
-    onOpenPresets={() => (showPresets = true)}
-    onOpenSettings={() => (showSettings = true)}
+    onOpenPresets={() => (activeView = "presets")}
+    onOpenSettings={() => (activeView = "settings")}
+    onNavigateQueue={() => (activeView = "queue")}
     addDisabled={downloadsDisabled}
   />
 
   <div class="flex min-w-0 flex-1 flex-col overflow-y-auto">
-    <QueueToolbar {visibleItems} />
-    <Queue
-      items={visibleItems}
-      totalCount={queueStore.items.length}
-      onAdd={openAdd}
-      onShowAll={showAll}
-      addDisabled={downloadsDisabled}
-    />
+    {#if activeView === "queue"}
+      <QueueToolbar {visibleItems} />
+      <Queue
+        items={visibleItems}
+        totalCount={queueStore.items.length}
+        onAdd={openAdd}
+        onShowAll={showAll}
+        addDisabled={downloadsDisabled}
+      />
+    {:else if activeView === "presets"}
+      <Presets />
+    {:else}
+      <Settings onReRunOnboarding={onReRunOnboarding} />
+    {/if}
   </div>
 </div>
 
 <DetailDrawer />
 
 <AddDownload bind:open={showAddDownload} />
-
-{#if showPresets}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    class="fixed inset-0 z-50 flex items-center justify-center bg-[color-mix(in_srgb,var(--surface-lowest)_70%,transparent)]"
-    onclick={() => (showPresets = false)}
-  >
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-      class="relative max-h-[calc(100vh-4rem)] overflow-y-auto rounded-lg bg-[var(--surface-lowest)]"
-      onclick={(e) => e.stopPropagation()}
-    >
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        class="absolute end-3 top-3 z-10 text-muted-foreground"
-        onclick={() => (showPresets = false)}
-        aria-label="Close"
-      >
-        <X aria-hidden="true" />
-      </Button>
-      <Presets />
-    </div>
-  </div>
-{/if}
-
-{#if showSettings}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    class="fixed inset-0 z-50 flex items-center justify-center bg-[color-mix(in_srgb,var(--surface-lowest)_70%,transparent)]"
-    onclick={() => (showSettings = false)}
-  >
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-      class="relative max-h-[calc(100vh-4rem)] overflow-y-auto rounded-lg bg-[var(--surface-lowest)]"
-      onclick={(e) => e.stopPropagation()}
-    >
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        class="absolute end-3 top-3 z-10 text-muted-foreground"
-        onclick={() => (showSettings = false)}
-        aria-label="Close"
-      >
-        <X aria-hidden="true" />
-      </Button>
-      <Settings
-        onReRunOnboarding={() => {
-          showSettings = false;
-          onReRunOnboarding();
-        }}
-      />
-    </div>
-  </div>
-{/if}
